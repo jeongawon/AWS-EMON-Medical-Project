@@ -290,7 +290,7 @@ aws cloudformation deploy --stack-name say2-6team-monitoring \
 
 | 이름 | 담당 영역 |
 |------|-----------|
-| 원정아 | ECG 모달 개발 · 프론트엔드 (React) · 모바일 (Flutter) |
+| 원정아 👑 | 기획 · 설계 · ECG 모달 개발 · 프론트엔드 (React) · 모바일 (Flutter) |
 | 홍경태 | LAB 모달 개발 · 데이터베이스 설계 · 모니터링 |
 | 양정인 | RAG 구축 · 보안 설계 · 네트워크 설계 |
 | 이정인 | 오케스트레이터 개발 · ECS 인프라 |
