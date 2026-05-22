@@ -1,0 +1,452 @@
+# ============================================================
+# Aurora Serverless v2 - Database Schema Definition
+# drai_ops operations DB (separate from HAPI FHIR)
+#
+# Design principles:
+#   - Patient basic info / vitals / blood tests -> delegated to HAPI FHIR
+#   - AI inference results / reports / event logs -> stored in this DB (drai_ops)
+#   - FHIR IDs used directly as PKs (no UUID conversion needed)
+#   - Raw modal responses preserved as JSONB -> fed into Bedrock for comprehensive
+#     judgment without structural loss
+# ============================================================
+
+# -- Common Parameters ----------------------------------------
+parameters:
+  ProjectName:
+    type: String
+    default: say2-6team
+  Environment:
+    type: String
+    default: dev
+    allowed_values: [dev, staging, prod]
+  Owner:
+    type: String
+    default: hkt
+    allowed_values: [unassigned, wja, lji, hkt, yji]
+
+common_tags:
+  - Key: Project
+    Value: "!Ref ProjectName"
+  - Key: Environment
+    Value: "!Ref Environment"
+  - Key: Owner
+    Value: "!Ref Owner"
+
+# ============================================================
+
+database:
+  name: drai_ops
+  description: "Operations DB - same RDS instance as HAPI FHIR (hapi database), separate DB"
+
+tables:
+
+  # ----------------------------------------------------------
+  # 1. encounters - one ER visit record
+  #    1:1 mapping with FHIR Encounter
+  #    encounter_id = FHIR Encounter ID (auto-assigned by HAPI)
+  # ----------------------------------------------------------
+  - name: encounters
+    description: "One ER visit record - 1:1 mapping with FHIR Encounter"
+    columns:
+      - name: encounter_id
+        type: TEXT
+        primary_key: true
+        description: "FHIR Encounter ID (auto-assigned by HAPI)"
+      - name: patient_id
+        type: TEXT
+        nullable: false
+        description: "FHIR Patient ID"
+      - name: subject_id
+        type: VARCHAR(20)
+        nullable: true
+        description: "MIMIC original patient ID (S3 ECG/CXR/Lab lookup key)"
+      - name: chief_complaint
+        type: TEXT
+        nullable: true
+        description: "Chief complaint"
+      - name: patient_name
+        type: VARCHAR(128)
+        nullable: true
+        description: "Patient name"
+      - name: patient_age
+        type: INTEGER
+        nullable: true
+        description: "Patient age"
+      - name: patient_gender
+        type: VARCHAR(16)
+        nullable: true
+        description: "Patient gender"
+      - name: started_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+        description: "Visit start time"
+      - name: closed_at
+        type: TIMESTAMPTZ
+        nullable: true
+        description: "Visit end time"
+      - name: status
+        type: VARCHAR(20)
+        nullable: false
+        default: "'active'"
+        description: "Visit status - 'active' | 'closed'"
+        note: "No CHECK constraint. Value validated at application level"
+      - name: metadata
+        type: JSONB
+        default: "'{}'::jsonb"
+        description: "Additional metadata (for flexible extension)"
+    indexes:
+      - name: idx_enc_patient
+        columns: [patient_id]
+      - name: idx_enc_subject
+        columns: [subject_id]
+      - name: idx_enc_status_start
+        columns: [status, started_at]
+        order: DESC
+        description: "Query latest visits by status"
+
+  # ----------------------------------------------------------
+  # 2. modal_results - raw responses from each modal (ECG/CXR/LAB) (core!)
+  #    raw_response(JSONB) is the original PredictResponse returned by modal service.
+  #    This is fed directly into Bedrock for comprehensive judgment.
+  # ----------------------------------------------------------
+  - name: modal_results
+    description: "AI modal inference raw responses - unified storage for ECG/CXR/LAB"
+    columns:
+      - name: id
+        type: BIGSERIAL
+        primary_key: true
+        description: "Auto-increment PK"
+      - name: encounter_id
+        type: TEXT
+        nullable: false
+        references: encounters(encounter_id)
+        on_delete: CASCADE
+        description: "Parent visit ID"
+      - name: subject_id
+        type: VARCHAR(20)
+        nullable: true
+        description: "MIMIC subject_id (auto-filled by trigger)"
+      - name: modality
+        type: VARCHAR(16)
+        nullable: false
+        description: "Modal type - 'ECG' | 'CXR' | 'LAB'"
+        note: "No CHECK constraint. Value validated at application level"
+      - name: service_request_id
+        type: VARCHAR(64)
+        nullable: true
+        description: "FHIR ServiceRequest ID"
+      - name: raw_response
+        type: JSONB
+        nullable: false
+        description: "Raw modal service response (full PredictResponse)"
+      - name: risk_level
+        type: VARCHAR(20)
+        nullable: true
+        description: "Risk summary - 'routine' | 'urgent' | 'critical'"
+        note: "No CHECK constraint. 3 levels per schema.sql comment (watch not used)"
+      - name: summary
+        type: TEXT
+        nullable: true
+        description: "Report summary text"
+      - name: synced_to_fhir
+        type: BOOLEAN
+        nullable: false
+        default: "FALSE"
+        description: "FHIR sync flag (currently unused, kept for compatibility)"
+      - name: created_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+    constraints:
+      - type: UNIQUE
+        columns: [encounter_id, modality]
+        description: "One result per modal per encounter (UPSERT on re-run)"
+    indexes:
+      - name: idx_mr_enc
+        columns: [encounter_id]
+      - name: idx_mr_subject
+        columns: [subject_id]
+      - name: idx_mr_risk
+        columns: [risk_level]
+      - name: idx_mr_created
+        columns: [created_at]
+        order: DESC
+      - name: idx_mr_sr
+        columns: [service_request_id]
+      - name: idx_mr_raw_gin
+        type: GIN
+        columns: [raw_response]
+        description: "For searching JSONB internal fields"
+
+  # ----------------------------------------------------------
+  # 3. diagnostic_reports - comprehensive diagnostic results (Bedrock output + physician edits)
+  # ----------------------------------------------------------
+  - name: diagnostic_reports
+    description: "Comprehensive diagnostic results - Bedrock AI output + physician edits/signature"
+    columns:
+      - name: id
+        type: BIGSERIAL
+        primary_key: true
+        description: "Auto-increment PK"
+      - name: encounter_id
+        type: TEXT
+        nullable: false
+        references: encounters(encounter_id)
+        on_delete: CASCADE
+        description: "Parent visit ID"
+      - name: subject_id
+        type: VARCHAR(20)
+        nullable: true
+        description: "MIMIC subject_id (auto-filled by trigger)"
+      - name: fhir_report_id
+        type: VARCHAR(64)
+        nullable: true
+        description: "FHIR DiagnosticReport ID (mapped after creation)"
+      - name: ai_diagnosis
+        type: TEXT
+        nullable: true
+        description: "AI comprehensive diagnostic report"
+      - name: ai_recommendations
+        type: JSONB
+        default: "'[]'::jsonb"
+        description: "AI recommended actions list"
+      - name: ai_risk_level
+        type: VARCHAR(20)
+        nullable: true
+        description: "AI assessed risk level - 'routine' | 'urgent' | 'critical'"
+        note: "No CHECK constraint. Value validated at application level"
+      - name: physician_edits
+        type: TEXT
+        nullable: true
+        description: "Physician edits/additional notes"
+      - name: status
+        type: VARCHAR(20)
+        nullable: false
+        default: "'preliminary'"
+        description: "Report status - 'preliminary' | 'signed' | 'amended'"
+        note: "No CHECK constraint. Value validated at application level"
+      - name: signed_by
+        type: VARCHAR(64)
+        nullable: true
+        description: "Signing physician ID"
+      - name: signed_at
+        type: TIMESTAMPTZ
+        nullable: true
+        description: "Signature timestamp"
+      - name: last_reminder_at
+        type: TIMESTAMPTZ
+        nullable: true
+        description: "FCM unsigned reminder send time (spam prevention). NULL = not yet sent"
+        added_in: "migration 009"
+      - name: created_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+      - name: updated_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+        description: "Auto-updated (trigger)"
+    constraints:
+      - type: UNIQUE
+        columns: [encounter_id]
+        description: "1 encounter = 1 report (UPSERT on regeneration)"
+    indexes:
+      - name: idx_dr_enc
+        columns: [encounter_id]
+      - name: idx_dr_subject
+        columns: [subject_id]
+      - name: idx_dr_status
+        columns: [status, created_at]
+        order: DESC
+      - name: idx_dr_unsigned_reminder
+        columns: [created_at, last_reminder_at]
+        where: "status <> 'signed'"
+        description: "Partial index for reminder worker to quickly find unsigned rows older than 5 minutes (migration 009)"
+
+  # ----------------------------------------------------------
+  # 4. modal_events - WebSocket event log (for debug/retransmission)
+  # ----------------------------------------------------------
+  - name: modal_events
+    description: "WebSocket event log - for debugging and event retransmission"
+    columns:
+      - name: id
+        type: BIGSERIAL
+        primary_key: true
+        description: "Auto-increment PK"
+      - name: encounter_id
+        type: TEXT
+        nullable: true
+        description: "Related visit ID (may be absent)"
+      - name: subject_id
+        type: VARCHAR(20)
+        nullable: true
+        description: "MIMIC subject_id (auto-filled by trigger)"
+      - name: event_type
+        type: VARCHAR(40)
+        nullable: false
+        description: "Event type (initial_proposals, modal_completed, ready_for_report, etc.)"
+      - name: payload
+        type: JSONB
+        nullable: false
+        default: "'{}'::jsonb"
+        description: "Event payload (full JSON)"
+      - name: created_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+    indexes:
+      - name: idx_me_enc_time
+        columns: [encounter_id, created_at]
+        order: DESC
+      - name: idx_me_subject
+        columns: [subject_id]
+      - name: idx_me_type
+        columns: [event_type]
+
+  # ----------------------------------------------------------
+  # 5. fhir_sync_queue - HAPI sync backlog (Graceful Degradation)
+  #    When HAPI is temporarily down, operations DB INSERT proceeds normally,
+  #    and HAPI sync is queued here -> retry worker backfills every 5 minutes.
+  # ----------------------------------------------------------
+  - name: fhir_sync_queue
+    description: "HAPI sync backlog - graceful degradation when HAPI is down"
+    columns:
+      - name: id
+        type: BIGSERIAL
+        primary_key: true
+        description: "Auto-increment PK"
+      - name: encounter_id
+        type: TEXT
+        nullable: false
+        description: "Related visit ID"
+      - name: patient_id
+        type: TEXT
+        nullable: true
+        description: "FHIR Patient ID (if available)"
+      - name: resource_type
+        type: VARCHAR(40)
+        nullable: false
+        description: "FHIR resource type (Patient/Encounter/ServiceRequest/Condition, etc.)"
+      - name: resource_id
+        type: TEXT
+        nullable: false
+        description: "UUID we issued (HAPI PUT target ID)"
+      - name: payload
+        type: JSONB
+        nullable: false
+        description: "Original FHIR JSON to send to HAPI"
+      - name: status
+        type: VARCHAR(20)
+        nullable: false
+        default: "'pending'"
+        description: "Sync status - 'pending' | 'synced' | 'failed'"
+        note: "No CHECK constraint. retry worker validates values"
+      - name: retry_count
+        type: INTEGER
+        nullable: false
+        default: "0"
+        description: "Retry count (marked as failed after 5 attempts)"
+      - name: last_error
+        type: TEXT
+        nullable: true
+        description: "Last failure error message"
+      - name: created_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+      - name: synced_at
+        type: TIMESTAMPTZ
+        nullable: true
+        description: "Successful sync timestamp"
+    indexes:
+      - name: idx_fsq_pending
+        type: PARTIAL
+        columns: [status, created_at]
+        where: "status = 'pending'"
+        description: "Fast lookup for pending rows only (worker scans every time)"
+      - name: idx_fsq_encounter
+        columns: [encounter_id]
+
+  # ----------------------------------------------------------
+  # 6. device_tokens - mobile push notification tokens (FCM / APNs / Web Push)
+  #    Flutter app upserts token via POST /devices/register on startup.
+  #    Backend sends push to active tokens when critical events occur.
+  # ----------------------------------------------------------
+  - name: device_tokens
+    description: "Mobile push notification tokens (registered by Flutter app on startup)"
+    columns:
+      - name: id
+        type: BIGSERIAL
+        primary_key: true
+      - name: user_id
+        type: TEXT
+        nullable: true
+        description: "Cognito sub or physician id (anonymous registration allowed)"
+      - name: token
+        type: TEXT
+        nullable: false
+        description: "FCM/APNs/Web Push token"
+      - name: platform
+        type: VARCHAR(20)
+        nullable: false
+        description: "'ios' | 'android' | 'web'"
+        note: "No CHECK constraint. Literal validated at application level"
+      - name: app_version
+        type: VARCHAR(20)
+        nullable: true
+        description: "App version (e.g. 1.0.0)"
+      - name: last_seen_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+        description: "Updated on re-registration with same token (UPSERT)"
+      - name: created_at
+        type: TIMESTAMPTZ
+        nullable: false
+        default: NOW()
+    constraints:
+      - type: UNIQUE
+        columns: [token]
+        description: "One row per token (UPSERT key)"
+    indexes:
+      - name: idx_dt_user
+        columns: [user_id]
+      - name: idx_dt_platform
+        columns: [platform]
+      - name: idx_dt_active
+        columns: [last_seen_at]
+        order: DESC
+        description: "Fast lookup for active tokens (last_seen within 30 days)"
+
+# ----------------------------------------------------------
+# Triggers & Functions
+# ----------------------------------------------------------
+triggers:
+
+  - name: _bump_updated_at
+    type: function
+    description: "Auto-update function for updated_at"
+    applies_to:
+      - table: diagnostic_reports
+        trigger_name: trg_dr_updated_at
+        event: BEFORE UPDATE
+        for_each: ROW
+
+  - name: _fill_subject_id
+    type: function
+    description: "Auto-lookup subject_id from encounters on INSERT/UPDATE by encounter_id"
+    applies_to:
+      - table: modal_results
+        trigger_name: trg_mr_fill_subject
+        event: BEFORE INSERT OR UPDATE OF encounter_id
+        for_each: ROW
+      - table: diagnostic_reports
+        trigger_name: trg_dr_fill_subject
+        event: BEFORE INSERT OR UPDATE OF encounter_id
+        for_each: ROW
+      - table: modal_events
+        trigger_name: trg_me_fill_subject
+        event: BEFORE INSERT OR UPDATE OF encounter_id
+        for_each: ROW

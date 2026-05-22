@@ -1,0 +1,225 @@
+# ============================================================
+# Aurora Serverless v2 - Initial Migration SQL
+# Dedicated to drai_ops operations DB
+#
+# How to run:
+#   psql -U admin -d drai_ops -f schema.sql
+#   (or auto-run via docker-entrypoint-initdb.d/)
+# ============================================================
+
+# -- Common Parameters ----------------------------------------
+parameters:
+  ProjectName:
+    type: String
+    default: say2-6team
+  Environment:
+    type: String
+    default: dev
+    allowed_values: [dev, staging, prod]
+  Owner:
+    type: String
+    default: hkt
+    allowed_values: [unassigned, wja, lji, hkt, yji]
+
+common_tags:
+  - Key: Project
+    Value: "!Ref ProjectName"
+  - Key: Environment
+    Value: "!Ref Environment"
+  - Key: Owner
+    Value: "!Ref Owner"
+
+# ============================================================
+
+migrations:
+
+  - version: "001"
+    description: "encounters table - one ER visit record"
+    sql: |
+      CREATE TABLE IF NOT EXISTS encounters (
+          encounter_id       TEXT PRIMARY KEY,
+          patient_id         TEXT NOT NULL,
+          subject_id         VARCHAR(20),
+          chief_complaint    TEXT,
+          patient_name       VARCHAR(128),
+          patient_age        INTEGER,
+          patient_gender     VARCHAR(16),
+          started_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          closed_at          TIMESTAMPTZ,
+          status             VARCHAR(20) NOT NULL DEFAULT 'active',
+          metadata           JSONB DEFAULT '{}'::jsonb
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_enc_patient      ON encounters(patient_id);
+      CREATE INDEX IF NOT EXISTS idx_enc_subject      ON encounters(subject_id);
+      CREATE INDEX IF NOT EXISTS idx_enc_status_start ON encounters(status, started_at DESC);
+
+  - version: "002"
+    description: "modal_results table - raw modal responses (JSONB)"
+    sql: |
+      CREATE TABLE IF NOT EXISTS modal_results (
+          id                 BIGSERIAL PRIMARY KEY,
+          encounter_id       TEXT NOT NULL REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+          subject_id         VARCHAR(20),
+          modality           VARCHAR(16) NOT NULL,
+          service_request_id VARCHAR(64),
+          raw_response       JSONB NOT NULL,
+          risk_level         VARCHAR(20),
+          summary            TEXT,
+          synced_to_fhir     BOOLEAN NOT NULL DEFAULT FALSE,
+          created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (encounter_id, modality)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mr_enc        ON modal_results(encounter_id);
+      CREATE INDEX IF NOT EXISTS idx_mr_subject    ON modal_results(subject_id);
+      CREATE INDEX IF NOT EXISTS idx_mr_risk       ON modal_results(risk_level);
+      CREATE INDEX IF NOT EXISTS idx_mr_created    ON modal_results(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_mr_sr         ON modal_results(service_request_id);
+      CREATE INDEX IF NOT EXISTS idx_mr_raw_gin    ON modal_results USING GIN (raw_response);
+
+  - version: "003"
+    description: "diagnostic_reports table - comprehensive diagnostic results"
+    sql: |
+      CREATE TABLE IF NOT EXISTS diagnostic_reports (
+          id                 BIGSERIAL PRIMARY KEY,
+          encounter_id       TEXT NOT NULL REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+          subject_id         VARCHAR(20),
+          fhir_report_id     VARCHAR(64),
+          ai_diagnosis       TEXT,
+          ai_recommendations JSONB DEFAULT '[]'::jsonb,
+          ai_risk_level      VARCHAR(20),
+          physician_edits    TEXT,
+          status             VARCHAR(20) NOT NULL DEFAULT 'preliminary',
+          signed_by          VARCHAR(64),
+          signed_at          TIMESTAMPTZ,
+          created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (encounter_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_dr_enc     ON diagnostic_reports(encounter_id);
+      CREATE INDEX IF NOT EXISTS idx_dr_subject ON diagnostic_reports(subject_id);
+      CREATE INDEX IF NOT EXISTS idx_dr_status  ON diagnostic_reports(status, created_at DESC);
+
+  - version: "004"
+    description: "modal_events table - WebSocket event log"
+    sql: |
+      CREATE TABLE IF NOT EXISTS modal_events (
+          id           BIGSERIAL PRIMARY KEY,
+          encounter_id TEXT,
+          subject_id   VARCHAR(20),
+          event_type   VARCHAR(40) NOT NULL,
+          payload      JSONB NOT NULL DEFAULT '{}'::jsonb,
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_me_enc_time ON modal_events(encounter_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_me_subject  ON modal_events(subject_id);
+      CREATE INDEX IF NOT EXISTS idx_me_type     ON modal_events(event_type);
+
+  - version: "005"
+    description: "updated_at auto-update trigger"
+    sql: |
+      CREATE OR REPLACE FUNCTION _bump_updated_at() RETURNS TRIGGER AS $$
+      BEGIN
+          NEW.updated_at = NOW();
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_dr_updated_at ON diagnostic_reports;
+      CREATE TRIGGER trg_dr_updated_at
+      BEFORE UPDATE ON diagnostic_reports
+      FOR EACH ROW EXECUTE FUNCTION _bump_updated_at();
+
+  - version: "006"
+    description: "subject_id auto-fill trigger - applied to 3 tables"
+    sql: |
+      CREATE OR REPLACE FUNCTION _fill_subject_id() RETURNS TRIGGER AS $$
+      BEGIN
+          IF NEW.subject_id IS NULL AND NEW.encounter_id IS NOT NULL THEN
+              SELECT subject_id INTO NEW.subject_id
+              FROM encounters
+              WHERE encounter_id = NEW.encounter_id;
+          END IF;
+          RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      DROP TRIGGER IF EXISTS trg_mr_fill_subject ON modal_results;
+      CREATE TRIGGER trg_mr_fill_subject
+      BEFORE INSERT OR UPDATE OF encounter_id ON modal_results
+      FOR EACH ROW EXECUTE FUNCTION _fill_subject_id();
+
+      DROP TRIGGER IF EXISTS trg_dr_fill_subject ON diagnostic_reports;
+      CREATE TRIGGER trg_dr_fill_subject
+      BEFORE INSERT OR UPDATE OF encounter_id ON diagnostic_reports
+      FOR EACH ROW EXECUTE FUNCTION _fill_subject_id();
+
+      DROP TRIGGER IF EXISTS trg_me_fill_subject ON modal_events;
+      CREATE TRIGGER trg_me_fill_subject
+      BEFORE INSERT OR UPDATE OF encounter_id ON modal_events
+      FOR EACH ROW EXECUTE FUNCTION _fill_subject_id();
+
+  - version: "007"
+    description: "fhir_sync_queue table - HAPI sync backlog (Graceful Degradation)"
+    sql: |
+      -- When HAPI is temporarily down, operations DB INSERT proceeds normally,
+      -- and HAPI sync is queued here -> retry worker backfills every 5 minutes.
+      -- Physician screen is unaware of HAPI downtime and operates normally.
+      CREATE TABLE IF NOT EXISTS fhir_sync_queue (
+          id            BIGSERIAL PRIMARY KEY,
+          encounter_id  TEXT NOT NULL,
+          patient_id    TEXT,
+          resource_type VARCHAR(40) NOT NULL,                  -- Patient/Encounter/ServiceRequest/Condition/...
+          resource_id   TEXT NOT NULL,                         -- UUID we issued (HAPI PUT target)
+          payload       JSONB NOT NULL,                        -- Original FHIR JSON to send to HAPI
+          status        VARCHAR(20) NOT NULL DEFAULT 'pending',-- pending / synced / failed
+          retry_count   INTEGER NOT NULL DEFAULT 0,
+          last_error    TEXT,
+          created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          synced_at     TIMESTAMPTZ
+      );
+
+      -- Partial index - fast lookup for pending rows only (worker scans every time)
+      CREATE INDEX IF NOT EXISTS idx_fsq_pending
+          ON fhir_sync_queue(status, created_at)
+          WHERE status = 'pending';
+
+      CREATE INDEX IF NOT EXISTS idx_fsq_encounter
+          ON fhir_sync_queue(encounter_id);
+
+  - version: "008"
+    description: "device_tokens table - mobile push notification tokens (FCM / APNs / Web Push)"
+    sql: |
+      -- Flutter app upserts token via POST /devices/register on startup.
+      -- Backend sends push to active tokens when critical events occur.
+      CREATE TABLE IF NOT EXISTS device_tokens (
+          id           BIGSERIAL PRIMARY KEY,
+          user_id      TEXT,                                  -- Cognito sub or physician id (nullable: anonymous device allowed)
+          token        TEXT NOT NULL UNIQUE,                  -- FCM/APNs push token (UPSERT key)
+          platform     VARCHAR(20) NOT NULL,                  -- 'ios' | 'android' | 'web'
+          app_version  VARCHAR(20),
+          last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),    -- Updated on re-registration with same token
+          created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_dt_user     ON device_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_dt_platform ON device_tokens(platform);
+      -- Fast lookup for active tokens - last_seen within 30 days
+      CREATE INDEX IF NOT EXISTS idx_dt_active   ON device_tokens(last_seen_at DESC);
+
+  - version: "009"
+    description: "diagnostic_reports.last_reminder_at - for 5-minute unsigned reminder worker"
+    sql: |
+      -- If a physician does not sign a report within 5 minutes, send an FCM reminder push.
+      -- To prevent sending to the same row again, record the send time in last_reminder_at column.
+      -- NULL means it has never been sent.
+      ALTER TABLE diagnostic_reports
+        ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;
+
+      -- Partial index for worker to quickly find unsigned rows older than 5 minutes
+      CREATE INDEX IF NOT EXISTS idx_dr_unsigned_reminder
+        ON diagnostic_reports(created_at, last_reminder_at)
+        WHERE status <> 'signed';
