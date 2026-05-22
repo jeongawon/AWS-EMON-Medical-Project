@@ -74,14 +74,6 @@ Parameters:
 Resources:
   ###########################################################################
   # KMS
-  #
-  # Purpose:
-  #   - Common project KMS key for Aurora, S3, Secrets Manager, and other
-  #     security-sensitive resources.
-  #
-  # Alias:
-  #   - alias/ is required by AWS KMS alias naming rules.
-  #   - say2-6team-kms-key is the team-agreed project key name.
   ###########################################################################
   ProjectKmsKey:
     Type: AWS::KMS::Key
@@ -129,10 +121,13 @@ Resources:
   #   - ChromaDB/Vector DB is embedded inside the RAG container (file mode).
   #   - chroma-sg is reserved for future external ChromaDB if needed.
   #
+  # Router:
+  #   - Stateless fallback routing layer (port 8004).
+  #   - When orchestrator is down, router handles direct modal calls and
+  #     assembles context for RAG. Router does not perform judgment or DB write.
+  #
   # NACLs:
   #   - Not included in this version.
-  #   - Add Data subnet NACL hardening later after ECS/DB/Endpoint connectivity
-  #     is verified.
   ###########################################################################
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -458,6 +453,7 @@ Resources:
       SourceSecurityGroupId: !Ref RouterSecurityGroup
       Description: Router to RAG service (fallback)
 
+  # Modal/RAG direct Aurora access
   AuroraIngressFromRAG:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -500,16 +496,6 @@ Resources:
 
   ###########################################################################
   # SG Egress Rules
-  #
-  # S3 Gateway Endpoint note:
-  #   Security Groups cannot directly reference a Gateway Endpoint.
-  #   During dev, HTTPS egress to 0.0.0.0/0 is allowed for S3 Gateway access.
-  #   App/Data subnets have no IGW/NAT default route, so direct internet egress
-  #   is still blocked at the routing layer.
-  #
-  # Hardening:
-  #   Replace broad HTTPS egress with managed prefix lists or stricter rules
-  #   if the team decides to enforce stronger egress control.
   ###########################################################################
   ALBEgressToCentral:
     Type: AWS::EC2::SecurityGroupEgress
@@ -731,6 +717,16 @@ Resources:
       CidrIp: 0.0.0.0/0
       Description: RAG HTTPS egress for S3 Gateway Endpoint during dev
 
+  RAGEgressToAurora:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref RAGSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref AuroraSecurityGroup
+      Description: RAG service to Aurora PostgreSQL (for narrative storage)
+
   ChromaEgressToEndpoints:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
@@ -831,16 +827,6 @@ Resources:
       ToPort: 443
       CidrIp: 0.0.0.0/0
       Description: Router HTTPS egress for S3 Gateway Endpoint during dev
-
-  RAGEgressToAurora:
-    Type: AWS::EC2::SecurityGroupEgress
-    Properties:
-      GroupId: !Ref RAGSecurityGroup
-      IpProtocol: tcp
-      FromPort: 5432
-      ToPort: 5432
-      DestinationSecurityGroupId: !Ref AuroraSecurityGroup
-      Description: RAG service to Aurora PostgreSQL (for narrative storage)
 
   ###########################################################################
   # IAM Roles
@@ -1128,14 +1114,6 @@ Resources:
               #   - Assemble prompt with retrieved context.
               #   - Invoke Bedrock (Claude) for automated narrative generation.
               #   - Write generated narrative to Aurora PostgreSQL.
-              #
-              # Orchestrator (healthy path):
-              #   - Calls modal services via Cloud Map, collects results.
-              #   - Passes assembled context to RAG /generate.
-              #
-              # Router (fallback path, orchestrator down):
-              #   - Calls modal services via Cloud Map directly.
-              #   - Assembles context and passes to RAG /generate.
               #################################################################
               - Sid: InvokeBedrockForNarrativeGeneration
                 Effect: Allow
@@ -1296,24 +1274,32 @@ Resources:
   ###########################################################################
   # Cognito
   #
-  # Current version:
-  #   - Cognito is included to give frontend/backend teams stable IDs early.
-  #   - CallbackUrl and LogoutUrl default to localhost placeholders.
+  # 변경 이력:
+  #   - v1: email 기반 로그인 (초기 placeholder)
+  #   - v2 (현재): 사번(username) 기반 로그인, email은 alias (복구용)
   #
-  # Why not final:
-  #   - Final frontend domain and CloudFront domain may not be available yet.
+  # 설계 의도:
+  #   - 의사/간호사가 사번(DR001, NR001 등)으로 로그인
+  #   - email은 AliasAttributes로 유지 (계정 복구, 알림용)
+  #   - AdminCreateUserOnly: true → 관리자가 사번으로 사용자 생성
+  #   - custom:role 속성 추가 → 향후 SSO/SAML IdP 연동 시 역할 매핑 용이
   #
-  # Next steps:
-  #   - After frontend/CloudFront domain is finalized, update this stack with
-  #     the final HTTPS callback/logout URLs.
-  #   - Review OAuth flow/scopes with frontend implementation.
-  #   - Consider MFA only after initial login flow is working.
+  # SSO 확장 계획:
+  #   - 병원 SSO(SAML 2.0) 연동 시:
+  #     1. AWS::Cognito::UserPoolIdentityProvider (SAML type) 리소스 추가
+  #     2. SupportedIdentityProviders에 해당 IdP 추가
+  #     3. AttributeMapping으로 사번/역할 자동 매핑
+  #   - Google/외부 IdP 연동 시:
+  #     1. AWS::Cognito::UserPoolIdentityProvider (OIDC type) 리소스 추가
+  #     2. SupportedIdentityProviders에 Google 추가
+  #   - 현재 구조에서 IdP 추가만으로 SSO 전환 가능 (Pool 재생성 불필요)
   ###########################################################################
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
       UserPoolName: !Sub "${ProjectName}-user-pool"
-      UsernameAttributes:
+      # UsernameAttributes 제거 — username을 사번(DR001, NR001)으로 직접 사용
+      AliasAttributes:
         - email
       AutoVerifiedAttributes:
         - email
@@ -1321,6 +1307,20 @@ Resources:
         RecoveryMechanisms:
           - Name: verified_email
             Priority: 1
+      Schema:
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        # SSO 연동 시 IdP에서 전달받을 역할 속성 (doctor, nurse, admin 등)
+        - Name: custom:role
+          AttributeDataType: String
+          Mutable: true
+          Required: false
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -1329,7 +1329,10 @@ Resources:
           RequireNumbers: true
           RequireSymbols: false
       AdminCreateUserConfig:
-        AllowAdminCreateUserOnly: false
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailSubject: !Sub "[${ProjectName}] 계정이 생성되었습니다"
+          EmailMessage: "사번: {username}, 임시 비밀번호: {####}\n첫 로그인 시 비밀번호를 변경해주세요."
       UserPoolTags:
         Project: !Ref ProjectName
         Owner: !Ref Owner
@@ -1345,8 +1348,11 @@ Resources:
       ExplicitAuthFlows:
         - ALLOW_USER_SRP_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+        # 관리자가 사번+임시비밀번호로 사용자 생성 후 초기 로그인 지원
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
       SupportedIdentityProviders:
         - COGNITO
+        # SSO 추가 시 여기에 IdP name 추가 (예: "Google", "HospitalSAML")
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows:
         - code
@@ -1358,6 +1364,14 @@ Resources:
         - !Ref CognitoCallbackUrl
       LogoutURLs:
         - !Ref CognitoLogoutUrl
+      # SSO 추가 시 토큰 유효 시간 조정 가능
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
 
   CognitoUserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain

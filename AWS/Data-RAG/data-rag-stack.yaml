@@ -56,6 +56,13 @@ Parameters:
       RAG API container image URI (ECR).
       Update after building and pushing the Docker image.
 
+  RAGDBBucketName:
+    Type: String
+    Default: "say2-6team-rag-db-666803869796"
+    Description: >
+      Existing S3 bucket name for RAG ChromaDB files.
+      This bucket was created outside this stack.
+
   RAGTaskCpu:
     Type: String
     Default: "512"
@@ -74,83 +81,30 @@ Parameters:
       - "2048"
     Description: Fargate task memory in MB.
 
+  DBSecretArn:
+    Type: String
+    Default: "PENDING-FROM-DATA-STACK"
+    Description: >
+      Aurora DB Secret ARN from data-stack.
+      Update after data-stack exports the Secret ARN.
+      Contains host, port, dbname, username, password.
+
 Conditions:
   ClusterReady: !Not [!Equals [!Ref ECSClusterArn, "PENDING-FROM-COMPUTE-STACK"]]
   ImageReady: !Not [!Equals [!Ref RAGContainerImage, "PENDING-ECR-IMAGE-URI"]]
+  DBReady: !Not [!Equals [!Ref DBSecretArn, "PENDING-FROM-DATA-STACK"]]
   CanDeployService: !And
     - !Condition ClusterReady
     - !Condition ImageReady
 
 Resources:
   ###########################################################################
-  # S3 Bucket - RAG DB Storage
+  # S3 Bucket - RAG DB Storage (already exists, referenced by parameter)
   ###########################################################################
-  RAGDBBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Sub "${ProjectName}-rag-db-${AWS::AccountId}"
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-rag-db"
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: DataType
-          Value: rag-vector-db
 
   ###########################################################################
-  # ECR Repository - RAG API Image
+  # ECR Repository - RAG API Image (already exists outside this stack)
   ###########################################################################
-  RAGECRRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub "${ProjectName}-rag-api"
-      ImageScanningConfiguration:
-        ScanOnPush: true
-      LifecyclePolicy:
-        LifecyclePolicyText: |
-          {
-            "rules": [
-              {
-                "rulePriority": 1,
-                "description": "Keep last 5 images",
-                "selection": {
-                  "tagStatus": "any",
-                  "countType": "imageCountMoreThan",
-                  "countNumber": 5
-                },
-                "action": {
-                  "type": "expire"
-                }
-              }
-            ]
-          }
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-rag-api"
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Environment
-          Value: !Ref Environment
 
   ###########################################################################
   # ECS Task Definition - RAG API (read-only ChromaDB inside)
@@ -180,13 +134,15 @@ Resources:
             - Name: CHROMA_DB_DIR
               Value: ./local_rag_db
             - Name: RAG_DB_BUCKET
-              Value: !Ref RAGDBBucket
+              Value: !Ref RAGDBBucketName
             - Name: EMBED_CACHE_ENABLED
               Value: "false"
             - Name: AWS_DEFAULT_REGION
               Value: !Ref AWS::Region
             - Name: AWS_REGION
               Value: !Ref AWS::Region
+            - Name: DB_SECRET_ARN
+              Value: !Ref DBSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -263,17 +219,13 @@ Resources:
 Outputs:
   RAGDBBucketName:
     Description: S3 bucket for RAG ChromaDB files
-    Value: !Ref RAGDBBucket
+    Value: !Ref RAGDBBucketName
     Export:
       Name: !Sub "${ProjectName}-rag-db-bucket"
 
-  RAGDBBucketArn:
-    Description: S3 bucket ARN for RAG DB
-    Value: !GetAtt RAGDBBucket.Arn
-
   RAGECRRepositoryUri:
     Description: ECR repository URI for RAG API image
-    Value: !GetAtt RAGECRRepository.RepositoryUri
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ProjectName}-rag-api"
     Export:
       Name: !Sub "${ProjectName}-rag-ecr-uri"
 

@@ -32,6 +32,7 @@ from app.central_final_opinion_builder import (
     build_final_prompt_package,
     invoke_bedrock_final_opinion,
 )
+from app.db import init_db_pool, is_db_ready, save_narrative_if_ready
 
 # ──────────────────────────────────────────────
 # 설정
@@ -66,6 +67,10 @@ def startup():
     client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
     collection = client.get_collection(name=COLLECTION_NAME)
     logger.info("[startup] ChromaDB loaded: %d documents", collection.count())
+
+    # DB 초기화 (graceful: 실패해도 서비스 정상 동작)
+    db_ok = init_db_pool()
+    logger.info("[startup] DB ready: %s", db_ok)
 
 
 # ──────────────────────────────────────────────
@@ -128,7 +133,23 @@ class GenerateResponse(BaseModel):
 # ──────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "documents": collection.count() if collection else 0}
+    """ECS health check용 — app alive + Chroma 로드 여부만 확인. DB 상태 무관."""
+    return {
+        "status": "ok",
+        "documents": collection.count() if collection else 0,
+    }
+
+
+@app.get("/ready")
+def ready():
+    """운영 모니터링용 — DB/Bedrock 상태 포함."""
+    return {
+        "status": "ok",
+        "chroma_documents": collection.count() if collection else 0,
+        "bedrock_client": bedrock_client is not None,
+        "db_ready": is_db_ready(),
+        "db_required": False,  # DDL 확정 + 저장 검증 완료 후 True로 전환
+    }
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -243,10 +264,17 @@ def generate_narrative(req: GenerateRequest):
     if not opinion.valid_required_sections:
         logger.warning("[generate] missing sections: %s", opinion.missing_sections)
 
-    # 4. encounter_id 없으면 Aurora 저장 스킵 (router 폴백 경로)
-    #    encounter_id 있어도 현재는 모달 서비스가 직접 저장하므로 저장 안 함
-    #    향후 소견서 저장이 필요하면 여기에 Aurora write 로직 추가
-    stored = False
+    # 4. Aurora 저장 시도 (graceful: DB 미준비 시 skip)
+    save_result = save_narrative_if_ready(
+        encounter_id=req.encounter_id,
+        narrative=opinion.text,
+        model_used=package.selected_model,
+        model_reason=package.selected_model_reason,
+        rag_fallback=package.rag_fallback,
+        rag_results=rag_response.get("results"),
+        modal_summary=req.modal_results,
+    )
+    stored = save_result["stored"]
 
     model_name = "Sonnet" if "sonnet" in package.selected_model.lower() else "Haiku"
 
@@ -264,7 +292,7 @@ def generate_narrative(req: GenerateRequest):
             for r in rag_response.get("results", [])
         ],
         stored=stored,
-        warnings=opinion.warnings + query_result.warnings,
+        warnings=opinion.warnings + query_result.warnings + save_result.get("warnings", []),
     )
 
 
