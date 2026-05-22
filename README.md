@@ -315,4 +315,4 @@ aws cloudformation deploy --stack-name say2-6team-monitoring \
 
 **Last Updated**: 2026-05-22  
 **Version**: 2.1.0  
-**Status**: 🚧 ECS 전환 진행 중 (모달 3종 ECR 배포 완료, orchestrator + router-svc 전환 대기)
+**Status**: ✅ ECS Fargate 배포 완료 (compute-stack 포함 전체 스택 운영 중)
