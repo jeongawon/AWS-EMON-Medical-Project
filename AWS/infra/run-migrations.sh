@@ -4,56 +4,32 @@ set -e
 REGION="ap-northeast-2"
 PROJECT_NAME="say2-6team"
 
+CLUSTER_ARN="arn:aws:rds:ap-northeast-2:666803869796:cluster:say2-6team-aurora-cluster"
+SECRET_ARN="arn:aws:secretsmanager:ap-northeast-2:666803869796:secret:say2-6team/aurora-credentials-9yLhmd"
+DATABASE="central_db"
+
 echo "=========================================="
 echo "Aurora DB Schema & Migrations Setup"
+echo "Using RDS Data API (no psql required)"
 echo "=========================================="
 
-# Get Aurora endpoint
-AURORA_ENDPOINT=$(aws cloudformation describe-stacks \
-  --stack-name ${PROJECT_NAME}-aurora \
-  --query 'Stacks[0].Outputs[?OutputKey==`ClusterEndpoint`].OutputValue' \
-  --output text \
-  --region ${REGION})
+# RDS Data API helper — SQL 한 줄씩 실행
+run_sql() {
+  local sql="$1"
+  local desc="$2"
+  aws rds-data execute-statement \
+    --resource-arn "$CLUSTER_ARN" \
+    --secret-arn "$SECRET_ARN" \
+    --database "$DATABASE" \
+    --sql "$sql" \
+    --region "$REGION" \
+    --output text > /dev/null
+  echo "[OK] $desc"
+}
 
-if [ -z "$AURORA_ENDPOINT" ]; then
-  echo "[FAIL] Error: Aurora endpoint not found!"
-  echo "   Make sure ${PROJECT_NAME}-aurora stack is deployed."
-  exit 1
-fi
-
-echo "[OK] Aurora Endpoint: ${AURORA_ENDPOINT}"
-
-# Get DB password from Secrets Manager
-DB_SECRET=$(aws secretsmanager get-secret-value \
-  --secret-id ${PROJECT_NAME}-aurora-master-secret \
-  --query SecretString \
-  --output text \
-  --region ${REGION})
-
-DB_USERNAME=$(echo $DB_SECRET | jq -r .username)
-DB_PASSWORD=$(echo $DB_SECRET | jq -r .password)
-
-if [ -z "$DB_USERNAME" ] || [ -z "$DB_PASSWORD" ]; then
-  echo "[FAIL] Error: Failed to retrieve DB credentials from Secrets Manager"
-  exit 1
-fi
-
-echo "[OK] DB Credentials retrieved"
-
-# Path relative to script location
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MIGRATIONS_FILE="${SCRIPT_DIR}/../AWS/aurora-serverless/migrations.yaml"
-
-if [ ! -f "$MIGRATIONS_FILE" ]; then
-  echo "[FAIL] Error: migrations.yaml not found at ${MIGRATIONS_FILE}"
-  exit 1
-fi
-
-echo "[OK] Migrations file found"
 echo ""
-echo "[WARN]  WARNING: This will execute SQL migrations on Aurora database 'drai_ops'"
-echo "   Endpoint: ${AURORA_ENDPOINT}"
-echo "   Database: drai_ops"
+echo "[WARN] WARNING: This will execute SQL migrations on Aurora database '${DATABASE}'"
+echo "   Cluster: ${CLUSTER_ARN}"
 echo ""
 read -p "Continue? (y/N): " -n 1 -r
 echo
@@ -62,22 +38,12 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
   exit 0
 fi
 
-# Extract SQL from YAML and execute
 echo ""
-echo "Extracting and executing migrations..."
+echo "Running migrations..."
+echo ""
 
-# Create temporary SQL file
-TEMP_SQL=$(mktemp)
-
-# Extract SQL from migrations.yaml (versions 001~009)
-cat > "$TEMP_SQL" << 'EOF'
--- ============================================================
--- drai_ops DB initialization script
--- Auto-extracted from migrations.yaml
--- ============================================================
-
--- 001: encounters table
-CREATE TABLE IF NOT EXISTS encounters (
+# ── 001: encounters ──────────────────────────────────────────
+run_sql "CREATE TABLE IF NOT EXISTS encounters (
     encounter_id       TEXT PRIMARY KEY,
     patient_id         TEXT NOT NULL,
     subject_id         VARCHAR(20),
@@ -89,16 +55,17 @@ CREATE TABLE IF NOT EXISTS encounters (
     closed_at          TIMESTAMPTZ,
     status             VARCHAR(20) NOT NULL DEFAULT 'active',
     metadata           JSONB DEFAULT '{}'::jsonb
-);
+)" "001 encounters table"
 
-CREATE INDEX IF NOT EXISTS idx_enc_patient      ON encounters(patient_id);
-CREATE INDEX IF NOT EXISTS idx_enc_subject      ON encounters(subject_id);
-CREATE INDEX IF NOT EXISTS idx_enc_status_start ON encounters(status, started_at DESC);
+run_sql "CREATE INDEX IF NOT EXISTS idx_enc_patient ON encounters(patient_id)" "001 idx_enc_patient"
+run_sql "CREATE INDEX IF NOT EXISTS idx_enc_subject ON encounters(subject_id)" "001 idx_enc_subject"
+run_sql "CREATE INDEX IF NOT EXISTS idx_enc_status_start ON encounters(status, started_at DESC)" "001 idx_enc_status_start"
 
--- 002: modal_results table
-CREATE TABLE IF NOT EXISTS modal_results (
+# ── 002: modal_results ───────────────────────────────────────
+run_sql "CREATE TABLE IF NOT EXISTS modal_results (
     id                 BIGSERIAL PRIMARY KEY,
-    encounter_id       TEXT NOT NULL REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+    encounter_id       TEXT REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+    session_id         VARCHAR(64),
     subject_id         VARCHAR(20),
     modality           VARCHAR(16) NOT NULL,
     service_request_id VARCHAR(64),
@@ -107,20 +74,24 @@ CREATE TABLE IF NOT EXISTS modal_results (
     summary            TEXT,
     synced_to_fhir     BOOLEAN NOT NULL DEFAULT FALSE,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (encounter_id, modality)
-);
+    CONSTRAINT modal_results_must_have_key CHECK (encounter_id IS NOT NULL OR session_id IS NOT NULL)
+)" "002 modal_results table"
 
-CREATE INDEX IF NOT EXISTS idx_mr_enc        ON modal_results(encounter_id);
-CREATE INDEX IF NOT EXISTS idx_mr_subject    ON modal_results(subject_id);
-CREATE INDEX IF NOT EXISTS idx_mr_risk       ON modal_results(risk_level);
-CREATE INDEX IF NOT EXISTS idx_mr_created    ON modal_results(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_mr_sr         ON modal_results(service_request_id);
-CREATE INDEX IF NOT EXISTS idx_mr_raw_gin    ON modal_results USING GIN (raw_response);
+run_sql "CREATE UNIQUE INDEX IF NOT EXISTS modal_results_enc_modality_unique ON modal_results (encounter_id, modality) NULLS NOT DISTINCT" "002 unique enc+modality"
+run_sql "CREATE UNIQUE INDEX IF NOT EXISTS modal_results_session_modality_unique ON modal_results (session_id, modality) NULLS NOT DISTINCT" "002 unique session+modality"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_enc     ON modal_results(encounter_id)" "002 idx_mr_enc"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_subject ON modal_results(subject_id)" "002 idx_mr_subject"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_risk    ON modal_results(risk_level)" "002 idx_mr_risk"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_created ON modal_results(created_at DESC)" "002 idx_mr_created"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_sr      ON modal_results(service_request_id)" "002 idx_mr_sr"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_raw_gin ON modal_results USING GIN (raw_response)" "002 idx_mr_raw_gin"
+run_sql "CREATE INDEX IF NOT EXISTS idx_mr_session ON modal_results(session_id) WHERE session_id IS NOT NULL" "002 idx_mr_session"
 
--- 003: diagnostic_reports table
-CREATE TABLE IF NOT EXISTS diagnostic_reports (
+# ── 003: diagnostic_reports ──────────────────────────────────
+run_sql "CREATE TABLE IF NOT EXISTS diagnostic_reports (
     id                 BIGSERIAL PRIMARY KEY,
-    encounter_id       TEXT NOT NULL REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+    encounter_id       TEXT REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+    session_id         VARCHAR(64),
     subject_id         VARCHAR(20),
     fhir_report_id     VARCHAR(64),
     ai_diagnosis       TEXT,
@@ -130,71 +101,64 @@ CREATE TABLE IF NOT EXISTS diagnostic_reports (
     status             VARCHAR(20) NOT NULL DEFAULT 'preliminary',
     signed_by          VARCHAR(64),
     signed_at          TIMESTAMPTZ,
+    last_reminder_at   TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (encounter_id)
-);
+    CONSTRAINT diagnostic_reports_must_have_key CHECK (encounter_id IS NOT NULL OR session_id IS NOT NULL)
+)" "003 diagnostic_reports table"
 
-CREATE INDEX IF NOT EXISTS idx_dr_enc     ON diagnostic_reports(encounter_id);
-CREATE INDEX IF NOT EXISTS idx_dr_subject ON diagnostic_reports(subject_id);
-CREATE INDEX IF NOT EXISTS idx_dr_status  ON diagnostic_reports(status, created_at DESC);
+run_sql "CREATE UNIQUE INDEX IF NOT EXISTS diagnostic_reports_enc_unique     ON diagnostic_reports (encounter_id) NULLS NOT DISTINCT" "003 unique encounter_id"
+run_sql "CREATE UNIQUE INDEX IF NOT EXISTS diagnostic_reports_session_unique ON diagnostic_reports (session_id)    NULLS NOT DISTINCT" "003 unique session_id"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dr_enc     ON diagnostic_reports(encounter_id)" "003 idx_dr_enc"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dr_subject ON diagnostic_reports(subject_id)" "003 idx_dr_subject"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dr_status  ON diagnostic_reports(status, created_at DESC)" "003 idx_dr_status"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dr_unsigned_reminder ON diagnostic_reports(created_at, last_reminder_at) WHERE status <> 'signed'" "003 idx_dr_unsigned_reminder"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dr_session ON diagnostic_reports(session_id) WHERE session_id IS NOT NULL" "003 idx_dr_session"
 
--- 004: modal_events table
-CREATE TABLE IF NOT EXISTS modal_events (
+# ── 004: modal_events ────────────────────────────────────────
+run_sql "CREATE TABLE IF NOT EXISTS modal_events (
     id           BIGSERIAL PRIMARY KEY,
     encounter_id TEXT,
     subject_id   VARCHAR(20),
     event_type   VARCHAR(40) NOT NULL,
     payload      JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+)" "004 modal_events table"
 
-CREATE INDEX IF NOT EXISTS idx_me_enc_time ON modal_events(encounter_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_me_subject  ON modal_events(subject_id);
-CREATE INDEX IF NOT EXISTS idx_me_type     ON modal_events(event_type);
+run_sql "CREATE INDEX IF NOT EXISTS idx_me_enc_time ON modal_events(encounter_id, created_at DESC)" "004 idx_me_enc_time"
+run_sql "CREATE INDEX IF NOT EXISTS idx_me_subject  ON modal_events(subject_id)" "004 idx_me_subject"
+run_sql "CREATE INDEX IF NOT EXISTS idx_me_type     ON modal_events(event_type)" "004 idx_me_type"
 
--- 005: updated_at auto-update trigger
-CREATE OR REPLACE FUNCTION _bump_updated_at() RETURNS TRIGGER AS $$
+# ── 005: updated_at trigger ──────────────────────────────────
+run_sql "CREATE OR REPLACE FUNCTION _bump_updated_at() RETURNS TRIGGER AS \$\$
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+\$\$ LANGUAGE plpgsql" "005 _bump_updated_at function"
 
-DROP TRIGGER IF EXISTS trg_dr_updated_at ON diagnostic_reports;
-CREATE TRIGGER trg_dr_updated_at
-BEFORE UPDATE ON diagnostic_reports
-FOR EACH ROW EXECUTE FUNCTION _bump_updated_at();
+run_sql "DROP TRIGGER IF EXISTS trg_dr_updated_at ON diagnostic_reports" "005 drop old trigger"
+run_sql "CREATE TRIGGER trg_dr_updated_at BEFORE UPDATE ON diagnostic_reports FOR EACH ROW EXECUTE FUNCTION _bump_updated_at()" "005 trg_dr_updated_at"
 
--- 006: subject_id auto-fill trigger
-CREATE OR REPLACE FUNCTION _fill_subject_id() RETURNS TRIGGER AS $$
+# ── 006: subject_id auto-fill trigger ────────────────────────
+run_sql "CREATE OR REPLACE FUNCTION _fill_subject_id() RETURNS TRIGGER AS \$\$
 BEGIN
     IF NEW.subject_id IS NULL AND NEW.encounter_id IS NOT NULL THEN
-        SELECT subject_id INTO NEW.subject_id
-        FROM encounters
-        WHERE encounter_id = NEW.encounter_id;
+        SELECT subject_id INTO NEW.subject_id FROM encounters WHERE encounter_id = NEW.encounter_id;
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+\$\$ LANGUAGE plpgsql" "006 _fill_subject_id function"
 
-DROP TRIGGER IF EXISTS trg_mr_fill_subject ON modal_results;
-CREATE TRIGGER trg_mr_fill_subject
-BEFORE INSERT OR UPDATE OF encounter_id ON modal_results
-FOR EACH ROW EXECUTE FUNCTION _fill_subject_id();
+run_sql "DROP TRIGGER IF EXISTS trg_mr_fill_subject ON modal_results" "006 drop mr trigger"
+run_sql "CREATE TRIGGER trg_mr_fill_subject BEFORE INSERT OR UPDATE OF encounter_id ON modal_results FOR EACH ROW EXECUTE FUNCTION _fill_subject_id()" "006 trg_mr_fill_subject"
+run_sql "DROP TRIGGER IF EXISTS trg_dr_fill_subject ON diagnostic_reports" "006 drop dr trigger"
+run_sql "CREATE TRIGGER trg_dr_fill_subject BEFORE INSERT OR UPDATE OF encounter_id ON diagnostic_reports FOR EACH ROW EXECUTE FUNCTION _fill_subject_id()" "006 trg_dr_fill_subject"
+run_sql "DROP TRIGGER IF EXISTS trg_me_fill_subject ON modal_events" "006 drop me trigger"
+run_sql "CREATE TRIGGER trg_me_fill_subject BEFORE INSERT OR UPDATE OF encounter_id ON modal_events FOR EACH ROW EXECUTE FUNCTION _fill_subject_id()" "006 trg_me_fill_subject"
 
-DROP TRIGGER IF EXISTS trg_dr_fill_subject ON diagnostic_reports;
-CREATE TRIGGER trg_dr_fill_subject
-BEFORE INSERT OR UPDATE OF encounter_id ON diagnostic_reports
-FOR EACH ROW EXECUTE FUNCTION _fill_subject_id();
-
-DROP TRIGGER IF EXISTS trg_me_fill_subject ON modal_events;
-CREATE TRIGGER trg_me_fill_subject
-BEFORE INSERT OR UPDATE OF encounter_id ON modal_events
-FOR EACH ROW EXECUTE FUNCTION _fill_subject_id();
-
--- 007: fhir_sync_queue table
-CREATE TABLE IF NOT EXISTS fhir_sync_queue (
+# ── 007: fhir_sync_queue ─────────────────────────────────────
+run_sql "CREATE TABLE IF NOT EXISTS fhir_sync_queue (
     id            BIGSERIAL PRIMARY KEY,
     encounter_id  TEXT NOT NULL,
     patient_id    TEXT,
@@ -206,17 +170,13 @@ CREATE TABLE IF NOT EXISTS fhir_sync_queue (
     last_error    TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     synced_at     TIMESTAMPTZ
-);
+)" "007 fhir_sync_queue table"
 
-CREATE INDEX IF NOT EXISTS idx_fsq_pending
-    ON fhir_sync_queue(status, created_at)
-    WHERE status = 'pending';
+run_sql "CREATE INDEX IF NOT EXISTS idx_fsq_pending  ON fhir_sync_queue(status, created_at) WHERE status = 'pending'" "007 idx_fsq_pending"
+run_sql "CREATE INDEX IF NOT EXISTS idx_fsq_encounter ON fhir_sync_queue(encounter_id)" "007 idx_fsq_encounter"
 
-CREATE INDEX IF NOT EXISTS idx_fsq_encounter
-    ON fhir_sync_queue(encounter_id);
-
--- 008: device_tokens table
-CREATE TABLE IF NOT EXISTS device_tokens (
+# ── 008: device_tokens ───────────────────────────────────────
+run_sql "CREATE TABLE IF NOT EXISTS device_tokens (
     id           BIGSERIAL PRIMARY KEY,
     user_id      TEXT,
     token        TEXT NOT NULL UNIQUE,
@@ -224,50 +184,30 @@ CREATE TABLE IF NOT EXISTS device_tokens (
     app_version  VARCHAR(20),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+)" "008 device_tokens table"
 
-CREATE INDEX IF NOT EXISTS idx_dt_user     ON device_tokens(user_id);
-CREATE INDEX IF NOT EXISTS idx_dt_platform ON device_tokens(platform);
-CREATE INDEX IF NOT EXISTS idx_dt_active   ON device_tokens(last_seen_at DESC);
-
--- 009: add last_reminder_at column to diagnostic_reports
-ALTER TABLE diagnostic_reports
-  ADD COLUMN IF NOT EXISTS last_reminder_at TIMESTAMPTZ;
-
-CREATE INDEX IF NOT EXISTS idx_dr_unsigned_reminder
-  ON diagnostic_reports(created_at, last_reminder_at)
-  WHERE status <> 'signed';
-
--- Done
-SELECT 'Migrations completed successfully!' AS status;
-EOF
-
-echo "Executing SQL migrations..."
-
-# Run psql (using PGPASSWORD environment variable)
-export PGPASSWORD="$DB_PASSWORD"
-
-psql -h "$AURORA_ENDPOINT" \
-     -U "$DB_USERNAME" \
-     -d drai_ops \
-     -f "$TEMP_SQL"
-
-# Delete temporary file
-rm -f "$TEMP_SQL"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dt_user     ON device_tokens(user_id)" "008 idx_dt_user"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dt_platform ON device_tokens(platform)" "008 idx_dt_platform"
+run_sql "CREATE INDEX IF NOT EXISTS idx_dt_active   ON device_tokens(last_seen_at DESC)" "008 idx_dt_active"
 
 echo ""
-echo "[OK] Migrations completed successfully!"
+echo "=========================================="
+echo "[OK] All migrations completed successfully!"
+echo "=========================================="
 echo ""
-echo "Database: drai_ops"
+echo "Database: ${DATABASE}"
 echo "Tables created:"
 echo "  - encounters"
-echo "  - modal_results"
-echo "  - diagnostic_reports"
+echo "  - modal_results       (session_id 지원)"
+echo "  - diagnostic_reports  (session_id 지원)"
 echo "  - modal_events"
 echo "  - fhir_sync_queue"
 echo "  - device_tokens"
 echo ""
-echo "Next steps:"
-echo "1. Verify tables: psql -h ${AURORA_ENDPOINT} -U ${DB_USERNAME} -d drai_ops -c '\\dt'"
-echo "2. Check compute-stack is using correct Aurora endpoint"
-echo "3. Restart compute services if needed"
+echo "Verify:"
+echo "  aws rds-data execute-statement \\"
+echo "    --resource-arn \"${CLUSTER_ARN}\" \\"
+echo "    --secret-arn \"${SECRET_ARN}\" \\"
+echo "    --database \"${DATABASE}\" \\"
+echo "    --sql \"SELECT table_name FROM information_schema.tables WHERE table_schema='public'\" \\"
+echo "    --region ${REGION}"

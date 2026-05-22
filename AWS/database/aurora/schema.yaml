@@ -1,10 +1,10 @@
 # ============================================================
 # Aurora Serverless v2 - Database Schema Definition
-# drai_ops operations DB (separate from HAPI FHIR)
+# central_db operations DB (separate from HAPI FHIR)
 #
 # Design principles:
 #   - Patient basic info / vitals / blood tests -> delegated to HAPI FHIR
-#   - AI inference results / reports / event logs -> stored in this DB (drai_ops)
+#   - AI inference results / reports / event logs -> stored in this DB (central_db)
 #   - FHIR IDs used directly as PKs (no UUID conversion needed)
 #   - Raw modal responses preserved as JSONB -> fed into Bedrock for comprehensive
 #     judgment without structural loss
@@ -35,7 +35,7 @@ common_tags:
 # ============================================================
 
 database:
-  name: drai_ops
+  name: central_db
   description: "Operations DB - same RDS instance as HAPI FHIR (hapi database), separate DB"
 
 tables:

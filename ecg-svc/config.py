@@ -14,3 +14,9 @@ MODEL_PATH    = MODEL_DIR / "ecg_s6.onnx"
 HOST          = os.getenv("HOST", "0.0.0.0")
 PORT          = int(os.getenv("PORT", 8000))
 LOG_LEVEL     = os.getenv("LOG_LEVEL", "info")
+
+# Aurora DB — Secrets Manager에서 주입된 환경변수로 DSN 조립
+# Task Definition의 secrets 블록에서 DB_HOST/DB_USERNAME/DB_PASSWORD 주입
+OPS_DB_URL    = os.getenv("OPS_DB_URL")  # entrypoint에서 조립되거나 직접 주입
+OPS_DB_POOL_MIN = int(os.getenv("OPS_DB_POOL_MIN", "1"))
+OPS_DB_POOL_MAX = int(os.getenv("OPS_DB_POOL_MAX", "3"))

@@ -226,7 +226,7 @@ Resources:
       Engine: aurora-postgresql
       EngineVersion: !Ref EngineVersion
       EngineMode: provisioned       # Serverless v2 uses 'provisioned' + ServerlessV2ScalingConfiguration
-      DatabaseName: central_db       # Operations DB. hapi is created via migration SQL with CREATE DATABASE
+      DatabaseName: central_db       # Operations DB (= drai_ops in legacy docs). hapi is created via migration SQL with CREATE DATABASE
       MasterUsername: !Sub "{{resolve:secretsmanager:${AuroraMasterSecret}::username}}"
       MasterUserPassword: !Sub "{{resolve:secretsmanager:${AuroraMasterSecret}::password}}"
 

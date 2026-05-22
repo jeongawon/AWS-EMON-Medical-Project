@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   Activity, FlaskConical, Image as ImageIcon, ChevronRight,
@@ -7,7 +7,10 @@ import {
 import { AppShell } from "../../components/v2/AppShell";
 import { ConfidenceBadge } from "../../components/v2/ConfidenceBadge";
 import { findPatient, type DemoPatient } from "../../lib/v2/demoStore";
-import { approveOrder, requestOrder, type AIRec, type ModalKey } from "../../lib/v2/api";
+import {
+  approveOrder, requestOrder, checkModalHealth, submitManualFindings,
+  type AIRec, type ModalKey,
+} from "../../lib/v2/api";
 import { PatientInfoSidebar } from "../../components/v2/PatientInfoSidebar";
 import { LiveBadge } from "../../components/v2/LiveBadge";
 import { useEncounterData } from "../../lib/v2/useEncounterData";
@@ -51,10 +54,18 @@ export default function PatientDetailPage() {
     }, 5000);
   }
 
-  // 모달 추론 서버 ON/OFF (목업 — 배포 후 /ops/health 연동). 칩 클릭으로 데모 토글.
+  // 모달 추론 서버 ON/OFF — /ops/health 15초 폴링으로 실제 상태 반영
   const [servers, setServers] = useState<Record<ModalKey, boolean>>({ ECG: true, CXR: true, LAB: true });
   const [manualOpen, setManualOpen] = useState<ModalKey | null>(null);
   const [manualDone, setManualDone] = useState<Set<ModalKey>>(new Set());
+
+  // 15초마다 모달 서비스 health 폴링
+  useEffect(() => {
+    const poll = () => checkModalHealth().then(setServers);
+    poll();
+    const id = setInterval(poll, 15_000);
+    return () => clearInterval(id);
+  }, []);
 
   const resultsHref = encounterId
     ? `/demo/patient/${id}/results?encounter_id=${encounterId}`
@@ -100,7 +111,6 @@ export default function PatientDetailPage() {
             servers={servers}
             manualDone={manualDone}
             onRequestOrder={handleRequestOrder}
-            onToggleServer={(m) => setServers((s) => ({ ...s, [m]: !s[m] }))}
             onManualOpen={(m) => setManualOpen(m)}
           />
         </div>
@@ -110,6 +120,7 @@ export default function PatientDetailPage() {
       {manualOpen && (
         <ManualInputModal
           modality={manualOpen}
+          encounterId={encounterId}
           onClose={() => setManualOpen(null)}
           onSave={() => {
             setManualDone((s) => new Set(s).add(manualOpen));
@@ -298,7 +309,7 @@ function AIRecPanel({
    우측 — 의사 직접 호출 패널 (AI 권고와 별개로 모달 검사 지시)
    ═══════════════════════════════════════════════════════════ */
 function ManualOrderPanel({
-  encounterId, recs, requesting, requested, servers, manualDone, onRequestOrder, onToggleServer, onManualOpen,
+  encounterId, recs, requesting, requested, servers, manualDone, onRequestOrder, onManualOpen,
 }: {
   encounterId: string | null;
   recs: AIRec[];
@@ -307,7 +318,6 @@ function ManualOrderPanel({
   servers: Record<ModalKey, boolean>;
   manualDone: Set<ModalKey>;
   onRequestOrder: (m: ModalKey) => void;
-  onToggleServer: (m: ModalKey) => void;
   onManualOpen: (m: ModalKey) => void;
 }) {
   const ALL: ModalKey[] = ["ECG", "CXR", "LAB"];
@@ -344,7 +354,6 @@ function ManualOrderPanel({
             serverUp={servers[m]}
             manualDone={manualDone.has(m)}
             onOrder={() => onRequestOrder(m)}
-            onToggleServer={() => onToggleServer(m)}
             onManualOpen={() => onManualOpen(m)}
           />
         ))}
@@ -354,7 +363,7 @@ function ManualOrderPanel({
 }
 
 function ManualOrderRow({
-  modality, rec, loading, requested, disabled, serverUp, manualDone, onOrder, onToggleServer, onManualOpen,
+  modality, rec, loading, requested, disabled, serverUp, manualDone, onOrder, onManualOpen,
 }: {
   modality: ModalKey;
   rec?: AIRec;
@@ -364,7 +373,6 @@ function ManualOrderRow({
   serverUp: boolean;
   manualDone: boolean;
   onOrder: () => void;
-  onToggleServer: () => void;
   onManualOpen: () => void;
 }) {
   const Icon = modality === "ECG" ? Activity : modality === "CXR" ? ImageIcon : FlaskConical;
@@ -380,7 +388,7 @@ function ManualOrderRow({
       !serverUp ? "border-red-200 bg-red-50/40 dark:border-red-500/40 dark:bg-red-500/15" :
       "border-slate-200 dark:border-vuno-border bg-white dark:bg-vuno-surface",
     )}>
-      {/* 상단: 아이콘 + 이름 + 서버 ON/OFF 칩 */}
+      {/* 상단: 아이콘 + 이름 + 서버 상태 칩 (읽기 전용 — 실제 health 반영) */}
       <div className="flex items-center gap-2.5">
         <span className="h-8 w-8 grid place-items-center rounded-lg flex-shrink-0 bg-slate-100 text-slate-600 dark:bg-vuno-bg dark:text-vuno-muted">
           <Icon className="h-4 w-4" />
@@ -389,19 +397,18 @@ function ManualOrderRow({
           <div className="text-[13px] font-bold text-slate-800 dark:text-white leading-none">{modality}</div>
           <div className="text-[10px] text-slate-400 dark:text-vuno-dim mt-0.5">{MODAL_LABEL[modality]}</div>
         </div>
-        <button
-          onClick={onToggleServer}
-          title="추론 서버 상태 (데모 — 클릭해서 ON/OFF 전환)"
+        <div
+          title={serverUp ? "추론 서버 정상" : "추론 서버 장애 — 의사 직접 입력 가능"}
           className={cn(
-            "inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition-colors",
+            "inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border",
             serverUp
               ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/40"
-              : "bg-slate-100 text-slate-500 border-slate-200 dark:bg-vuno-bg dark:text-vuno-muted dark:border-vuno-border",
+              : "bg-red-50 text-red-600 border-red-200 dark:bg-red-500/15 dark:text-red-300 dark:border-red-500/40",
           )}
         >
           {serverUp ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
           {serverUp ? "ON" : "OFF"}
-        </button>
+        </div>
       </div>
 
       {/* 하단: 액션 */}
@@ -444,12 +451,34 @@ function ManualOrderRow({
 }
 
 /* ── 직접 입력 팝업 모달 (추론 서버 OFF 시 의사 수기 입력) ── */
-function ManualInputModal({ modality, onClose, onSave }: {
-  modality: ModalKey; onClose: () => void; onSave: () => void;
+function ManualInputModal({ modality, encounterId, onClose, onSave }: {
+  modality: ModalKey;
+  encounterId: string | null;
+  onClose: () => void;
+  onSave: () => void;
 }) {
   const [findings, setFindings] = useState("");
   const [ecg, setEcg] = useState({ hr: "", pr: "", qrs: "", qt: "" });
+  const [saving, setSaving] = useState(false);
   const inputCls = "w-full h-9 px-3 rounded-lg bg-slate-50 border border-slate-200 text-slate-900 dark:bg-vuno-bg dark:border-vuno-border dark:text-white text-sm focus:outline-none focus:bg-white dark:focus:bg-vuno-bg focus:border-brand-500 focus:ring-2 focus:ring-brand-500/15 transition-colors";
+
+  async function handleSave() {
+    if (!findings.trim()) return;
+    setSaving(true);
+    try {
+      if (encounterId) {
+        await submitManualFindings({
+          encounterId,
+          modality,
+          findings,
+          ecgMeasurements: modality === "ECG" ? ecg : undefined,
+        });
+      }
+    } finally {
+      setSaving(false);
+      onSave();
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
@@ -510,11 +539,12 @@ function ManualInputModal({ modality, onClose, onSave }: {
             취소
           </button>
           <button
-            onClick={onSave}
-            disabled={!findings.trim()}
+            onClick={handleSave}
+            disabled={!findings.trim() || saving}
             className="h-9 px-4 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:bg-slate-200 disabled:text-slate-400 dark:disabled:bg-vuno-bg dark:disabled:text-vuno-dim disabled:cursor-not-allowed text-[13px] font-bold inline-flex items-center gap-1.5 transition-colors"
           >
-            <CheckCircle2 className="h-4 w-4" /> 저장
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            {saving ? "저장 중..." : "저장"}
           </button>
         </div>
       </div>

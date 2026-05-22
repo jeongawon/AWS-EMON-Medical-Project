@@ -29,6 +29,28 @@
         {
           "name": "PORT",
           "value": "8002"
+        },
+        {
+          "name": "DB_NAME",
+          "value": "central_db"
+        },
+        {
+          "name": "DB_PORT",
+          "value": "5432"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "DB_HOST",
+          "valueFrom": "arn:aws:secretsmanager:ap-northeast-2:666803869796:secret:say2-6team/aurora-credentials:host::"
+        },
+        {
+          "name": "DB_USERNAME",
+          "valueFrom": "arn:aws:secretsmanager:ap-northeast-2:666803869796:secret:say2-6team/aurora-credentials:username::"
+        },
+        {
+          "name": "DB_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:ap-northeast-2:666803869796:secret:say2-6team/aurora-credentials:password::"
         }
       ],
       "logConfiguration": {

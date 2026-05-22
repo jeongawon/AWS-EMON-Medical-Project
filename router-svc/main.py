@@ -53,6 +53,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -163,15 +164,13 @@ class AnalyzeRequest(BaseModel):
     """
     patient_info: PatientInfo
     # 프론트가 이미 갖고 있는 모달 결과
-    # - 살아있는 모달: 추론 결과 dict (프론트가 /route/ecg 등으로 직접 호출해서 받아온 것)
-    # - 장애 모달: 의사가 직접 입력한 텍스트 str
-    # - 미실시/불필요 모달: null 또는 키 생략 (둘 다 동일하게 처리됨)
-    #   예) "ECG": null  ←→  ECG 키 자체 없음  →  둘 다 "not_performed"로 처리
     modal_results: dict[str, dict[str, Any] | str | None] = {}
     # router가 직접 호출할 모달 목록 (modal_results에 없는 것 중)
     available_modals: list[str] = []
     # available_modals 호출 시 각 모달에 넘길 데이터 (record_path, image_base64 등)
     modal_data: dict[str, dict[str, Any]] = {}
+    # 오케스트레이터가 이미 encounter를 생성한 경우 전달 (있으면 session_id 대신 사용)
+    encounter_id: str | None = None
 
 
 # ------------------------------------------------------------------
@@ -370,6 +369,11 @@ async def analyze(req: AnalyzeRequest):
     # 1. router가 직접 호출할 모달 (available_modals에 있는 것만)
     modal_results: dict[str, Any] = {}
 
+    # session_id: encounter_id가 없을 때 모달/RAG가 DB 저장 시 사용하는 임시 키
+    # encounter_id가 있으면 그걸 그대로 사용 (오케스트레이터가 이미 생성한 경우)
+    session_id = req.encounter_id or f"router-{uuid.uuid4().hex}"
+    encounter_id = req.encounter_id  # None이면 폴백 경로
+
     async def call_modal(modality: str) -> tuple[str, Any]:
         url = MODAL_URLS.get(modality.upper())
         if not url:
@@ -380,6 +384,8 @@ async def analyze(req: AnalyzeRequest):
             "patient_info": req.patient_info.model_dump(exclude_none=True),
             "data": data,
             "context": {},
+            "encounter_id": encounter_id,   # None이면 모달이 session_id로 저장
+            "session_id": session_id,
         }
         try:
             result = await proxy_post(f"{url}/predict", f"{modality} Service", payload)
@@ -411,6 +417,8 @@ async def analyze(req: AnalyzeRequest):
     context_payload = {
         "patient_info": req.patient_info.model_dump(exclude_none=True),
         "modal_results": modal_results,
+        "encounter_id": encounter_id,   # None이면 RAG가 session_id로 저장
+        "session_id": session_id,
     }
 
     narrative: str | None = None

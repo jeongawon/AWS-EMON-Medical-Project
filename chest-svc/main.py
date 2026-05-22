@@ -19,10 +19,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-# shared schemas import
 sys.path.insert(0, "/app/shared")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "shared"))
 from schemas import PredictRequest, PredictResponse, Finding
+from db import init_pool, close_pool, save_modal_result
 
 from config import settings
 from pipeline import run_pipeline
@@ -60,10 +60,16 @@ async def lifespan(app: FastAPI):
     state["ready"] = True
     logger.info("chest-svc-v2 ready (2 models loaded).")
 
+    if settings.ops_db_url:
+        await init_pool(settings.ops_db_url, settings.ops_db_pool_min, settings.ops_db_pool_max)
+    else:
+        logger.warning("OPS_DB_URL not set — Aurora write disabled")
+
     yield
 
     state["models"].clear()
     state["ready"] = False
+    await close_pool()
 
 
 app = FastAPI(title="chest-svc-v2", version="2.0.0", lifespan=lifespan)
@@ -132,7 +138,6 @@ async def predict(req: PredictRequest):
         logger.error(f"Pipeline error: {e}", exc_info=True)
         raise HTTPException(500, f"Pipeline error: {str(e)}")
 
-    # findings 통합 — verification/evidence/impression_text 포함 (pipeline_findings 제거)
     findings = [
         Finding(
             name=f["name"],
@@ -150,11 +155,10 @@ async def predict(req: PredictRequest):
         for f in result["findings"]
     ]
 
-    # metadata — 부가 정보만 (view, image_size, timings, mask)
     metadata = result.get("metadata", {})
     metadata["mask_base64"] = result.get("mask_base64")
 
-    return PredictResponse(
+    response = PredictResponse(
         status=result["status"],
         modal="chest",
         findings=findings,
@@ -169,3 +173,13 @@ async def predict(req: PredictRequest):
         suggested_next_actions=[],
         metadata=metadata,
     )
+
+    # Aurora 저장 — encounter_id 또는 session_id 있을 때만
+    await save_modal_result(
+        modality="CXR",
+        raw_response=response.model_dump(),
+        encounter_id=req.encounter_id,
+        session_id=req.session_id,
+    )
+
+    return response

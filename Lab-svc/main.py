@@ -16,8 +16,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from config import HOST, PORT, LOG_LEVEL
+from config import HOST, PORT, LOG_LEVEL, OPS_DB_URL, OPS_DB_POOL_MIN, OPS_DB_POOL_MAX
 from shared.schemas import PredictRequest, PredictResponse
+from shared.db import init_pool, close_pool, save_modal_result
 from pipeline import LabPipeline
 from prognosis.model import load_models as load_prognosis_models, predict as predict_prognosis
 from prognosis.schema import BloodTestInput, PredictionResult
@@ -46,8 +47,13 @@ async def lifespan(app: FastAPI):
     logger.info("prognosis 모델 로딩 중...")
     prognosis_models["final"] = load_prognosis_models()
     logger.info("prognosis 모델 로딩 완료 (n=%d)", len(prognosis_models["final"]))
+    if OPS_DB_URL:
+        await init_pool(OPS_DB_URL, OPS_DB_POOL_MIN, OPS_DB_POOL_MAX)
+    else:
+        logger.warning("OPS_DB_URL not set — Aurora write disabled")
     yield
     prognosis_models.clear()
+    await close_pool()
 
 
 # ------------------------------------------------------------------
@@ -74,6 +80,14 @@ async def predict(req: PredictRequest) -> PredictResponse:
 
     if response.status == "error":
         raise HTTPException(status_code=500, detail="내부 서버 오류")
+
+    # Aurora 저장 — encounter_id 또는 session_id 있을 때만
+    await save_modal_result(
+        modality="LAB",
+        raw_response=response.model_dump(),
+        encounter_id=req.encounter_id,
+        session_id=req.session_id,
+    )
 
     return response
 

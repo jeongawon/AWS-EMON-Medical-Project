@@ -25,7 +25,7 @@ BEDROCK_MODEL_ID = os.getenv(
 )
 
 # Modal services — HTTP 엔드포인트 (ECS Service Discovery / EC2 직접 호출)
-# ECS 내부: http://{service}.drai.internal:8000
+# ECS 내부: http://{service}.say2-6team.local:8000
 # 로컬 개발: docker-compose로 같은 네트워크 (http://{service}:8000)
 # 공인 IP 직접 호출 (fallback): http://13.124.117.190:8000 등
 ECG_SERVICE_URL = os.getenv("ECG_SERVICE_URL", "http://52.79.251.216:8003")
@@ -34,6 +34,7 @@ LAB_SERVICE_URL = os.getenv(
     "LAB_SERVICE_URL",
     "http://52.79.251.216:8000",
 )
+RAG_SVC_URL = os.getenv("RAG_SVC_URL", "http://rag-svc.say2-6team.local:8000")
 
 # 6시간 후 악화 예측 (XGBoost 5-앙상블)
 # Lab-svc 내부로 통합됨 — 동일 컨테이너 8000 포트의 /predict_6h 엔드포인트.

@@ -202,7 +202,49 @@ export async function approveOrder(srId: string): Promise<boolean> {
   return !!res;
 }
 
-/* ── POST /orders/request — 의사 직접 오더 (AI 권고와 무관) ── */
+/* ── GET /ops/health — 모달 서비스 개별 health 상태 ─────────── */
+export interface ModalHealthStatus {
+  ECG: boolean;
+  CXR: boolean;
+  LAB: boolean;
+}
+
+export async function checkModalHealth(): Promise<ModalHealthStatus> {
+  const res = await jsonFetch<ModalHealthStatus>("/ops/health");
+  // 백엔드 미가동 시 전부 true로 폴백 (기존 동작 유지)
+  return res ?? { ECG: true, CXR: true, LAB: true };
+}
+
+/* ── POST /orders/manual-findings — 모달 장애 시 의사 수기 입력 전달 ── */
+export interface ManualFindingsInput {
+  encounterId: string;
+  modality: ModalKey;
+  findings: string;          // 의사 서술 소견
+  ecgMeasurements?: {        // ECG 전용 수치 (선택)
+    hr?: string;
+    pr?: string;
+    qrs?: string;
+    qt?: string;
+  };
+}
+
+export async function submitManualFindings(
+  input: ManualFindingsInput,
+): Promise<boolean> {
+  const res = await jsonFetch<{ status?: string }>("/orders/manual-findings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      encounter_id: input.encounterId,
+      modality: input.modality,
+      findings: input.findings,
+      ecg_measurements: input.ecgMeasurements ?? null,
+    }),
+  });
+  return !!res;
+}
+
+
 export async function requestOrder(
   encounterId: string,
   patientId: string,

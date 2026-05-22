@@ -45,7 +45,6 @@ from app.fhir.resources import (
 )
 from app.api.ws import broadcast
 from app.clients.modal_http import invoke_modal, ModalCallError, MODAL_SERVICE_URLS
-from app.db import modal_results as ops_modal_results
 from app.db import fhir_sync_queue as ops_fhir_queue
 
 logger = logging.getLogger(__name__)
@@ -135,19 +134,9 @@ async def _execute_modal_and_complete(sr_id: str, sr: dict):
             except Exception as e:
                 logger.warning(f"[prognosis] 통합 실패 (LAB 본 응답은 유지): {e}")
 
-        # ⭐ 운영 DB에 원본 응답 먼저 저장 (Primary Source of Truth)
-        #    FHIR 저장이 실패해도 이건 성공 → 종합 판단 가능
-        try:
-            await ops_modal_results.insert_modal_result(
-                encounter_id=encounter_id,
-                modality=modality,
-                service_request_id=sr_id,
-                raw_response=modal_result,
-            )
-        except Exception as e:
-            logger.warning(
-                "[ops_db] modal_result insert 실패 (FHIR 저장만 진행): %s", e
-            )
+        # ⭐ modal_results 저장은 각 모달 서비스가 직접 처리.
+        #    오케스트레이터는 저장하지 않음 (중복 방지).
+        #    모달 서비스가 /predict 응답 전 encounter_id 기준으로 UPSERT.
 
         # (FHIR Observation 저장 로직 제거)
         # AI 추론 결과(확실하지 않은 원시값)는 FHIR 표준에 반영하지 않고,
@@ -829,4 +818,60 @@ async def request_order(
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         logger.exception("Order request failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 의사 수기 입력 (모달 장애 시) ────────────────────────
+class ManualFindingsBody(BaseModel):
+    encounter_id: str
+    modality: str                          # ECG | CXR | LAB
+    findings: str                          # 의사 서술 소견
+    ecg_measurements: Optional[dict] = None  # ECG 전용 수치 (hr/pr/qrs/qt)
+
+
+@router.post("/manual-findings")
+async def submit_manual_findings(body: ManualFindingsBody):
+    """
+    모달 서비스 장애 시 의사가 직접 입력한 소견을 modal_results에 저장.
+
+    저장 형식:
+      raw_response = {
+        "status": "manual",
+        "modal": "<modality>",
+        "findings": "<의사 서술>",
+        "ecg_measurements": {...},   # ECG만
+        "risk_level": "unknown",
+        "summary": "<의사 서술 앞 100자>",
+      }
+
+    이후 소견서 생성 시 중앙이 Aurora에서 읽어 RAG-svc에 context로 전달.
+    장애 모달의 경우 의사 서술이 modal_results에 있으므로
+    나머지 정상 모달 결과와 함께 context 조립 가능.
+    """
+    from app.db import modal_results as ops_modal_results
+
+    raw_response = {
+        "status": "manual",
+        "modal": body.modality.upper(),
+        "findings": body.findings,
+        "risk_level": "unknown",
+        "summary": body.findings[:100],
+    }
+    if body.ecg_measurements:
+        raw_response["ecg_measurements"] = body.ecg_measurements
+
+    try:
+        result_id = await ops_modal_results.insert_modal_result(
+            encounter_id=body.encounter_id,
+            modality=body.modality.upper(),
+            service_request_id=None,
+            raw_response=raw_response,
+        )
+        logger.info(
+            "[manual-findings] saved: enc=%s modality=%s id=%s",
+            body.encounter_id, body.modality, result_id,
+        )
+        return {"status": "saved", "result_id": result_id}
+    except Exception as e:
+        logger.exception("Manual findings save failed")
         raise HTTPException(status_code=500, detail=str(e))

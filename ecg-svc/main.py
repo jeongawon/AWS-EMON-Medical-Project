@@ -15,8 +15,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from config import HOST, PORT, LOG_LEVEL
+from config import HOST, PORT, LOG_LEVEL, OPS_DB_URL, OPS_DB_POOL_MIN, OPS_DB_POOL_MAX
 from shared.schemas import PredictRequest, PredictResponse
+from shared.db import init_pool, close_pool, save_modal_result
 from pipeline import ECGPipeline
 
 # ------------------------------------------------------------------
@@ -40,7 +41,12 @@ async def lifespan(app: FastAPI):
     logger.info("서비스 시작 — 모델 로드 중...")
     pipeline.load()
     logger.info("서비스 준비 완료")
+    if OPS_DB_URL:
+        await init_pool(OPS_DB_URL, OPS_DB_POOL_MIN, OPS_DB_POOL_MAX)
+    else:
+        logger.warning("OPS_DB_URL not set — Aurora write disabled")
     yield
+    await close_pool()
     logger.info("서비스 종료")
 
 
@@ -67,9 +73,16 @@ async def predict(req: PredictRequest) -> PredictResponse:
     response = pipeline.predict(req)
 
     if response.status == "error":
-        # 클라이언트 오류(파일 없음 등)는 400, 내부 오류는 500
         code = 400 if "찾을 수 없습니다" in (response.error or "") else 500
         raise HTTPException(status_code=code, detail=response.error)
+
+    # Aurora 저장 — encounter_id 또는 session_id 있을 때만
+    await save_modal_result(
+        modality="ECG",
+        raw_response=response.model_dump(),
+        encounter_id=req.encounter_id,
+        session_id=req.session_id,
+    )
 
     return response
 

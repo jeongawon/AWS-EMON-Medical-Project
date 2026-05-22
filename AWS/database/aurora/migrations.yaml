@@ -1,9 +1,9 @@
 # ============================================================
 # Aurora Serverless v2 - Initial Migration SQL
-# Dedicated to drai_ops operations DB
+# Dedicated to central_db operations DB
 #
 # How to run:
-#   psql -U admin -d drai_ops -f schema.sql
+#   psql -U admin -d central_db -f schema.sql
 #   (or auto-run via docker-entrypoint-initdb.d/)
 # ============================================================
 
@@ -223,3 +223,64 @@ migrations:
       CREATE INDEX IF NOT EXISTS idx_dr_unsigned_reminder
         ON diagnostic_reports(created_at, last_reminder_at)
         WHERE status <> 'signed';
+
+  - version: "010"
+    description: "session_id + encounter_id nullable - router fallback path support"
+    sql: |
+      -- Router 폴백 경로에서 orchestrator 장애 시 HAPI encounter_id 없이도 저장 가능하도록.
+      -- session_id: router가 uuid4()로 생성해서 모달/RAG에 전달하는 임시 키.
+      -- 오케스트레이터 복구 후 실제 encounter_id로 backfill 가능.
+
+      -- modal_results: encounter_id nullable + session_id 추가
+      ALTER TABLE modal_results
+        ALTER COLUMN encounter_id DROP NOT NULL;
+
+      ALTER TABLE modal_results
+        ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
+
+      -- 기존 UNIQUE (encounter_id, modality) 제약 제거 후 재생성
+      ALTER TABLE modal_results
+        DROP CONSTRAINT IF EXISTS modal_results_encounter_id_modality_key;
+
+      ALTER TABLE modal_results
+        ADD CONSTRAINT modal_results_enc_modality_unique
+          UNIQUE NULLS NOT DISTINCT (encounter_id, modality);
+
+      ALTER TABLE modal_results
+        ADD CONSTRAINT modal_results_session_modality_unique
+          UNIQUE NULLS NOT DISTINCT (session_id, modality);
+
+      ALTER TABLE modal_results
+        ADD CONSTRAINT modal_results_must_have_key
+          CHECK (encounter_id IS NOT NULL OR session_id IS NOT NULL);
+
+      CREATE INDEX IF NOT EXISTS idx_mr_session
+        ON modal_results(session_id)
+        WHERE session_id IS NOT NULL;
+
+      -- diagnostic_reports: encounter_id nullable + session_id 추가
+      ALTER TABLE diagnostic_reports
+        ALTER COLUMN encounter_id DROP NOT NULL;
+
+      ALTER TABLE diagnostic_reports
+        ADD COLUMN IF NOT EXISTS session_id VARCHAR(64);
+
+      -- 기존 UNIQUE (encounter_id) 제약 제거 후 재생성
+      ALTER TABLE diagnostic_reports
+        DROP CONSTRAINT IF EXISTS diagnostic_reports_encounter_id_key;
+
+      ALTER TABLE diagnostic_reports
+        ADD CONSTRAINT diagnostic_reports_enc_unique
+          UNIQUE NULLS NOT DISTINCT (encounter_id);
+
+      ALTER TABLE diagnostic_reports
+        ADD CONSTRAINT diagnostic_reports_session_unique
+          UNIQUE NULLS NOT DISTINCT (session_id);
+
+      ALTER TABLE diagnostic_reports
+        ADD CONSTRAINT diagnostic_reports_must_have_key
+          CHECK (encounter_id IS NOT NULL OR session_id IS NOT NULL);
+
+      CREATE INDEX IF NOT EXISTS idx_dr_session
+        ON diagnostic_reports(session_id)
+        WHERE session_id IS NOT NULL;

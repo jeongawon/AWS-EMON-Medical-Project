@@ -30,6 +30,8 @@ class PredictRequest(BaseModel):
     patient_info: Optional[PatientInfo] = None
     data: ECGData
     context: dict = {}
+    encounter_id: Optional[str] = None   # 정상 경로: HAPI 발급 UUID
+    session_id: Optional[str] = None     # 폴백 경로: router가 생성한 임시 키
 
 
 class Finding(BaseModel):

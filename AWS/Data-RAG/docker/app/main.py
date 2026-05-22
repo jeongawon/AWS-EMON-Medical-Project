@@ -4,22 +4,24 @@ RAG API Server
 엔드포인트:
   GET  /health      — 헬스체크
   POST /query       — RAG 검색만 반환 (orchestrator 정상 경로)
-  POST /generate    — 검색 + 프롬프팅 + Bedrock 호출 + 소견 반환
+  POST /generate    — 검색 + 프롬프팅 + Bedrock 호출 + 소견 반환 + Aurora 저장
                       (orchestrator 정상 경로 및 router 폴백 경로 공용)
 
 /query 호출자:
   - orchestrator (정상 시): 검색 결과만 받아서 자체 Bedrock 호출
 
 /generate 호출자:
-  - orchestrator (정상 시): 소견 생성까지 위임
-  - router-svc (orchestrator 장애 시): context 조립 후 소견 생성 위임
+  - orchestrator (정상 시): encounter_id 포함 → diagnostic_reports에 저장
+  - router-svc (orchestrator 장애 시): session_id 포함 → session_id 기준으로 저장
 """
 
+import asyncio
 import os
 import json
 import time
 import logging
 
+import asyncpg
 import boto3
 import chromadb
 from fastapi import FastAPI, HTTPException
@@ -32,7 +34,6 @@ from app.central_final_opinion_builder import (
     build_final_prompt_package,
     invoke_bedrock_final_opinion,
 )
-from app.db import init_db_pool, is_db_ready, save_narrative_if_ready
 
 # ──────────────────────────────────────────────
 # 설정
@@ -46,6 +47,11 @@ TOP_K_FETCH = 20
 TOP_K_FINAL = 3
 MIN_SIMILARITY = 0.15
 
+# Aurora 연결 설정 — 환경변수로 주입 (Secrets Manager → Task Definition secrets)
+OPS_DB_URL = os.environ.get("OPS_DB_URL")  # postgresql://user:pass@host:5432/central_db
+OPS_DB_POOL_MIN = int(os.environ.get("OPS_DB_POOL_MIN", "1"))
+OPS_DB_POOL_MAX = int(os.environ.get("OPS_DB_POOL_MAX", "5"))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("rag-svc")
 
@@ -57,20 +63,41 @@ app = FastAPI(title="RAG Service", version="2.0.0")
 # 글로벌 클라이언트 (부팅 시 1회 초기화)
 bedrock_client = None
 collection = None
+_db_pool: asyncpg.Pool | None = None
 
 
 @app.on_event("startup")
-def startup():
-    global bedrock_client, collection
+async def startup():
+    global bedrock_client, collection, _db_pool
     region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-2"))
     bedrock_client = boto3.client("bedrock-runtime", region_name=region)
     client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
     collection = client.get_collection(name=COLLECTION_NAME)
     logger.info("[startup] ChromaDB loaded: %d documents", collection.count())
 
-    # DB 초기화 (graceful: 실패해도 서비스 정상 동작)
-    db_ok = init_db_pool()
-    logger.info("[startup] DB ready: %s", db_ok)
+    # Aurora 커넥션 풀 초기화 (OPS_DB_URL 없으면 DB 저장 비활성화)
+    if OPS_DB_URL:
+        try:
+            _db_pool = await asyncpg.create_pool(
+                dsn=OPS_DB_URL,
+                min_size=OPS_DB_POOL_MIN,
+                max_size=OPS_DB_POOL_MAX,
+                command_timeout=10,
+            )
+            logger.info("[startup] Aurora DB pool ready")
+        except Exception as e:
+            logger.warning("[startup] Aurora DB pool init failed (DB write disabled): %s", e)
+            _db_pool = None
+    else:
+        logger.warning("[startup] OPS_DB_URL not set — Aurora write disabled")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global _db_pool
+    if _db_pool:
+        await _db_pool.close()
+        logger.info("[shutdown] Aurora DB pool closed")
 
 
 # ──────────────────────────────────────────────
@@ -106,8 +133,8 @@ class GenerateRequest(BaseModel):
     POST /generate 요청 body.
 
     호출자:
-      - orchestrator (정상 경로): encounter_id 포함 가능
-      - router-svc (폴백 경로): encounter_id 없음 → Aurora 저장 스킵
+      - orchestrator (정상 경로): encounter_id 포함
+      - router-svc (폴백 경로): encounter_id 없음, session_id 포함 → Aurora 저장 시 session_id 사용
 
     modal_results 형식:
       - 살아있는 모달: 추론 결과 dict
@@ -116,7 +143,8 @@ class GenerateRequest(BaseModel):
     """
     patient_info: PatientInfo
     modal_results: dict[str, Any] = {}
-    encounter_id: str | None = None  # None이면 Aurora 저장 스킵
+    encounter_id: str | None = None   # 정상 경로: HAPI 발급 UUID
+    session_id: str | None = None     # 폴백 경로: router가 생성한 임시 키 (encounter_id 없을 때 사용)
 
 
 class GenerateResponse(BaseModel):
@@ -133,23 +161,7 @@ class GenerateResponse(BaseModel):
 # ──────────────────────────────────────────────
 @app.get("/health")
 def health():
-    """ECS health check용 — app alive + Chroma 로드 여부만 확인. DB 상태 무관."""
-    return {
-        "status": "ok",
-        "documents": collection.count() if collection else 0,
-    }
-
-
-@app.get("/ready")
-def ready():
-    """운영 모니터링용 — DB/Bedrock 상태 포함."""
-    return {
-        "status": "ok",
-        "chroma_documents": collection.count() if collection else 0,
-        "bedrock_client": bedrock_client is not None,
-        "db_ready": is_db_ready(),
-        "db_required": False,  # DDL 확정 + 저장 검증 완료 후 True로 전환
-    }
+    return {"status": "ok", "documents": collection.count() if collection else 0}
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -187,17 +199,19 @@ def query_rag(req: QueryRequest):
 
 
 @app.post("/generate", response_model=GenerateResponse)
-def generate_narrative(req: GenerateRequest):
+async def generate_narrative(req: GenerateRequest):
     """
-    RAG 검색 + 프롬프팅 + Bedrock 호출 + 소견 반환.
+    RAG 검색 + 프롬프팅 + Bedrock 호출 + 소견 반환 + Aurora 저장.
 
     호출 흐름:
       1. patient_info + modal_results → retrieval_query_builder로 검색 query 생성
       2. ChromaDB 검색 → Top-K 유사 사례
       3. central_final_opinion_builder로 프롬프트 패키지 생성 + Bedrock 호출
       4. 후처리 후 narrative 반환
-      5. encounter_id 있으면 Aurora 저장 (현재 미구현 — 모달 서비스가 직접 저장)
-         encounter_id 없으면 저장 스킵 (router 폴백 경로)
+      5. Aurora 저장:
+         - encounter_id 있으면 → diagnostic_reports(encounter_id=...) UPSERT
+         - session_id 있으면  → diagnostic_reports(session_id=...) UPSERT
+         - 둘 다 없으면       → 저장 스킵
     """
     if not req.modal_results and not req.patient_info.chief_complaint:
         raise HTTPException(
@@ -264,17 +278,19 @@ def generate_narrative(req: GenerateRequest):
     if not opinion.valid_required_sections:
         logger.warning("[generate] missing sections: %s", opinion.missing_sections)
 
-    # 4. Aurora 저장 시도 (graceful: DB 미준비 시 skip)
-    save_result = save_narrative_if_ready(
-        encounter_id=req.encounter_id,
-        narrative=opinion.text,
-        model_used=package.selected_model,
-        model_reason=package.selected_model_reason,
-        rag_fallback=package.rag_fallback,
-        rag_results=rag_response.get("results"),
-        modal_summary=req.modal_results,
-    )
-    stored = save_result["stored"]
+    # 5. Aurora 저장
+    #    - encounter_id 있으면 → diagnostic_reports(encounter_id=...) UPSERT
+    #    - session_id 있으면  → diagnostic_reports(session_id=...) UPSERT (폴백 경로)
+    #    - 둘 다 없으면       → 저장 스킵
+    #    - DB 풀 없으면       → 저장 스킵 (OPS_DB_URL 미설정 환경)
+    stored = False
+    if _db_pool and (req.encounter_id or req.session_id):
+        stored = await _save_diagnostic_report(
+            encounter_id=req.encounter_id,
+            session_id=req.session_id,
+            ai_diagnosis=opinion.text,
+            ai_risk_level=_extract_risk_level(req.modal_results),
+        )
 
     model_name = "Sonnet" if "sonnet" in package.selected_model.lower() else "Haiku"
 
@@ -292,7 +308,7 @@ def generate_narrative(req: GenerateRequest):
             for r in rag_response.get("results", [])
         ],
         stored=stored,
-        warnings=opinion.warnings + query_result.warnings + save_result.get("warnings", []),
+        warnings=opinion.warnings + query_result.warnings,
     )
 
 
@@ -359,3 +375,108 @@ def _diversity_filter_dicts(candidates: list[dict]) -> list[dict]:
 
     selected.sort(key=lambda x: x.get("similarity", 0), reverse=True)
     return selected[:TOP_K_FINAL]
+
+
+# ──────────────────────────────────────────────
+# Aurora DB 헬퍼
+# ──────────────────────────────────────────────
+
+async def _save_diagnostic_report(
+    *,
+    encounter_id: str | None,
+    session_id: str | None,
+    ai_diagnosis: str,
+    ai_risk_level: str | None,
+) -> bool:
+    """
+    diagnostic_reports 테이블에 소견서 UPSERT.
+
+    - encounter_id 있으면 encounter_id 기준 UPSERT (정상 경로)
+    - session_id만 있으면 session_id 기준 UPSERT (폴백 경로)
+    - 이미 signed 상태인 row는 덮어쓰지 않음
+
+    Returns:
+        True if saved, False if skipped or failed
+    """
+    try:
+        async with _db_pool.acquire() as conn:
+            if encounter_id:
+                # 정상 경로: encounter_id 기준 UPSERT
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO diagnostic_reports
+                        (encounter_id, session_id, ai_diagnosis, ai_risk_level, status)
+                    VALUES ($1, $2, $3, $4, 'preliminary')
+                    ON CONFLICT (encounter_id) DO UPDATE SET
+                        ai_diagnosis  = EXCLUDED.ai_diagnosis,
+                        ai_risk_level = EXCLUDED.ai_risk_level,
+                        status        = 'preliminary',
+                        updated_at    = NOW()
+                    WHERE diagnostic_reports.status <> 'signed'
+                    RETURNING id
+                    """,
+                    encounter_id,
+                    session_id,
+                    ai_diagnosis,
+                    ai_risk_level,
+                )
+            else:
+                # 폴백 경로: session_id 기준 UPSERT
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO diagnostic_reports
+                        (session_id, ai_diagnosis, ai_risk_level, status)
+                    VALUES ($1, $2, $3, 'preliminary')
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        ai_diagnosis  = EXCLUDED.ai_diagnosis,
+                        ai_risk_level = EXCLUDED.ai_risk_level,
+                        status        = 'preliminary',
+                        updated_at    = NOW()
+                    WHERE diagnostic_reports.status <> 'signed'
+                    RETURNING id
+                    """,
+                    session_id,
+                    ai_diagnosis,
+                    ai_risk_level,
+                )
+
+        if row is None:
+            logger.info(
+                "[generate] report already signed, skipping upsert (enc=%s, session=%s)",
+                encounter_id, session_id,
+            )
+            return False
+
+        logger.info(
+            "[generate] diagnostic_report saved: id=%s enc=%s session=%s risk=%s",
+            row["id"], encounter_id, session_id, ai_risk_level,
+        )
+        return True
+
+    except Exception as e:
+        # DB 저장 실패는 소견 반환을 막지 않음 — 경고만 기록
+        logger.warning(
+            "[generate] Aurora save failed (enc=%s, session=%s): %s",
+            encounter_id, session_id, e,
+        )
+        return False
+
+
+def _extract_risk_level(modal_results: dict[str, Any]) -> str | None:
+    """
+    모달 결과들에서 가장 높은 risk_level을 추출.
+    critical > urgent > routine 순서.
+    """
+    priority = {"critical": 2, "urgent": 1, "routine": 0}
+    highest: str | None = None
+    highest_score = -1
+
+    for result in modal_results.values():
+        if not isinstance(result, dict):
+            continue
+        level = result.get("risk_level")
+        if level and priority.get(level, -1) > highest_score:
+            highest = level
+            highest_score = priority[level]
+
+    return highest

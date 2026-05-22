@@ -1,5 +1,5 @@
 -- ================================================================
--- drai_ops 운영 DB 스키마 (PostgreSQL 16+)
+-- central_db 운영 DB 스키마 (PostgreSQL 16+)
 --
 -- 이 파일이 하는 일:
 --   - 우리 시스템 전용 운영 테이블 정의
@@ -7,7 +7,7 @@
 --   - 모달 원본 응답을 JSONB로 보존 → Bedrock 종합 판단 시 구조 손실 없이 투입
 --
 -- 실행 방법:
---   psql -U admin -d drai_ops -f schema.sql
+--   psql -U admin -d central_db -f schema.sql
 --   (또는 docker-entrypoint-initdb.d/ 로 자동 실행)
 -- ================================================================
 
@@ -39,10 +39,15 @@ CREATE INDEX IF NOT EXISTS idx_enc_status_start ON encounters(status, started_at
 -- 2. modal_results: 각 모달(ECG/CXR/LAB) 원본 응답 (핵심!)
 --    raw_response(JSONB)가 모달 서비스가 반환한 PredictResponse 원본.
 --    종합 판단 시 이걸 Bedrock에 그대로 투입.
+--
+--    session_id: orchestrator 장애 시 router 폴백 경로에서 사용하는 임시 키.
+--    encounter_id가 없을 때(HAPI 미발급) session_id로 row를 식별한다.
+--    오케스트레이터 복구 후 실제 encounter_id로 backfill 가능.
 -- ================================================================
 CREATE TABLE IF NOT EXISTS modal_results (
     id                 BIGSERIAL PRIMARY KEY,
-    encounter_id       TEXT NOT NULL REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+    encounter_id       TEXT REFERENCES encounters(encounter_id) ON DELETE CASCADE,  -- nullable: 폴백 경로에서 HAPI 미발급 시 NULL
+    session_id         VARCHAR(64),                              -- router 폴백 경로 임시 키 (encounter_id NULL일 때 사용)
     subject_id         VARCHAR(20),                              -- encounter_id의 환자 MIMIC subject_id (트리거 자동 채움)
     modality           VARCHAR(16) NOT NULL,                     -- ECG / CXR / LAB
     service_request_id VARCHAR(64),
@@ -51,7 +56,13 @@ CREATE TABLE IF NOT EXISTS modal_results (
     summary            TEXT,
     synced_to_fhir     BOOLEAN NOT NULL DEFAULT FALSE,           -- 호환용 (현재 미사용)
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (encounter_id, modality)
+    -- encounter_id 있으면 (encounter_id, modality) UNIQUE
+    -- encounter_id 없으면 (session_id, modality) UNIQUE
+    UNIQUE NULLS NOT DISTINCT (encounter_id, modality),
+    UNIQUE NULLS NOT DISTINCT (session_id, modality),
+    CONSTRAINT modal_results_must_have_key CHECK (
+        encounter_id IS NOT NULL OR session_id IS NOT NULL
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_mr_enc        ON modal_results(encounter_id);
@@ -64,10 +75,14 @@ CREATE INDEX IF NOT EXISTS idx_mr_raw_gin    ON modal_results USING GIN (raw_res
 
 -- ================================================================
 -- 3. diagnostic_reports: 종합 판단 결과 (Bedrock 출력 + 의사 수정)
+--
+--    session_id: orchestrator 장애 시 router 폴백 경로에서 사용하는 임시 키.
+--    encounter_id가 없을 때 session_id로 row를 식별한다.
 -- ================================================================
 CREATE TABLE IF NOT EXISTS diagnostic_reports (
     id                 BIGSERIAL PRIMARY KEY,
-    encounter_id       TEXT NOT NULL REFERENCES encounters(encounter_id) ON DELETE CASCADE,
+    encounter_id       TEXT REFERENCES encounters(encounter_id) ON DELETE CASCADE,  -- nullable: 폴백 경로에서 HAPI 미발급 시 NULL
+    session_id         VARCHAR(64),                                -- router 폴백 경로 임시 키 (encounter_id NULL일 때 사용)
     subject_id         VARCHAR(20),                                -- encounter_id의 MIMIC subject_id (트리거 자동 채움)
     fhir_report_id     VARCHAR(64),
     ai_diagnosis       TEXT,
@@ -80,7 +95,11 @@ CREATE TABLE IF NOT EXISTS diagnostic_reports (
     last_reminder_at   TIMESTAMPTZ,                                -- 5분 미서명 FCM 리마인더 발송 시각 (스팸 방지)
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (encounter_id)  -- 1 encounter = 1 소견서 (재생성 시 UPSERT)
+    UNIQUE NULLS NOT DISTINCT (encounter_id),   -- 1 encounter = 1 소견서 (재생성 시 UPSERT)
+    UNIQUE NULLS NOT DISTINCT (session_id),     -- 폴백 경로: 1 session = 1 소견서
+    CONSTRAINT diagnostic_reports_must_have_key CHECK (
+        encounter_id IS NOT NULL OR session_id IS NOT NULL
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_dr_enc     ON diagnostic_reports(encounter_id);

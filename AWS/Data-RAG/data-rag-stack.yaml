@@ -81,18 +81,9 @@ Parameters:
       - "2048"
     Description: Fargate task memory in MB.
 
-  DBSecretArn:
-    Type: String
-    Default: "PENDING-FROM-DATA-STACK"
-    Description: >
-      Aurora DB Secret ARN from data-stack.
-      Update after data-stack exports the Secret ARN.
-      Contains host, port, dbname, username, password.
-
 Conditions:
   ClusterReady: !Not [!Equals [!Ref ECSClusterArn, "PENDING-FROM-COMPUTE-STACK"]]
   ImageReady: !Not [!Equals [!Ref RAGContainerImage, "PENDING-ECR-IMAGE-URI"]]
-  DBReady: !Not [!Equals [!Ref DBSecretArn, "PENDING-FROM-DATA-STACK"]]
   CanDeployService: !And
     - !Condition ClusterReady
     - !Condition ImageReady
@@ -141,8 +132,17 @@ Resources:
               Value: !Ref AWS::Region
             - Name: AWS_REGION
               Value: !Ref AWS::Region
-            - Name: DB_SECRET_ARN
-              Value: !Ref DBSecretArn
+            - Name: DB_NAME
+              Value: central_db
+            - Name: DB_PORT
+              Value: "5432"
+          Secrets:
+            - Name: DB_HOST
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/aurora-credentials:host::"
+            - Name: DB_USERNAME
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/aurora-credentials:username::"
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/aurora-credentials:password::"
           LogConfiguration:
             LogDriver: awslogs
             Options:

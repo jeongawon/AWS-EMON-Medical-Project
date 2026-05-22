@@ -1,8 +1,8 @@
 """
-운영 DB (drai_ops) 패키지.
+운영 DB (central_db) 패키지.
 
 [이 패키지가 하는 일]
-HAPI FHIR와 별개로, 우리 시스템 전용 PostgreSQL(drai_ops) 접근 코드.
+HAPI FHIR와 별개로, 우리 시스템 전용 PostgreSQL(central_db) 접근 코드.
 
 [구성]
 - client.py: asyncpg 커넥션 풀 (startup/shutdown 관리)

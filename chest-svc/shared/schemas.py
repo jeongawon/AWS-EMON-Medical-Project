@@ -42,6 +42,8 @@ class PredictRequest(BaseModel):
     patient_info: PatientInfo
     data: dict                        # 모달마다 다름
     context: dict = {}                # 이전 모달 결과 요약
+    encounter_id: Optional[str] = None   # 정상 경로: HAPI 발급 UUID
+    session_id: Optional[str] = None     # 폴백 경로: router가 생성한 임시 키
 
 
 class PredictResponse(BaseModel):
