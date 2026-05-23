@@ -51,6 +51,22 @@ Parameters:
     Type: String
     Description: Router Service ECR image URI
 
+  HapiFhirUrl:
+    Type: String
+    Default: http://10.0.0.107:8080/fhir
+    Description: >
+      HAPI FHIR 서버 URL (hapi-fhir-ec2-stack의 EC2 사설 IP:8080/fhir).
+      EC2 인스턴스 교체 시 사설 IP가 바뀌므로 배포 시 갱신 필요.
+      (영구 안정화하려면 HAPI EC2를 Cloud Map/Route53 사설 DNS로 등록 권장)
+
+  FcmSecretArn:
+    Type: String
+    Default: arn:aws:secretsmanager:ap-northeast-2:666803869796:secret:say2-6team/fcm-credentials-A05MNf
+    Description: >
+      FCM 서비스계정 JSON Secrets Manager ARN (푸시 알림).
+      orchestrator 컨테이너에 FCM_CREDENTIALS_JSON 으로 주입.
+      실행역할에 이 시크릿 GetSecretValue 권한 필요(security-stack).
+
 # ============================================================
 # Resources
 # ============================================================
@@ -324,16 +340,31 @@ Resources:
             - ContainerPort: 8000
               Protocol: tcp
           Environment:
+            # 모달 서비스 URL — orchestrator config.py 가 읽는 이름은 *_SERVICE_URL.
+            # (과거 *_SVC_URL 이름은 코드가 안 읽어 잘못된 기본 IP로 가던 버그 → 정정)
+            - Name: ECG_SERVICE_URL
+              Value: http://ecg-svc.say2-6team.local:8001
+            - Name: CXR_SERVICE_URL
+              Value: http://cxr-svc.say2-6team.local:8002
+            - Name: LAB_SERVICE_URL
+              Value: http://lab-svc.say2-6team.local:8003
+            # 6h 악화예측 — lab-svc 통합 컨테이너의 /predict_6h (하드코딩 공인IP 기본값 정정)
+            - Name: BLOOD_PROGNOSIS_URL
+              Value: http://lab-svc.say2-6team.local:8003
+            # 레거시 이름 (router-svc 등 호환) — 유지
             - Name: CXR_SVC_URL
               Value: http://cxr-svc.say2-6team.local:8002
             - Name: ECG_SVC_URL
               Value: http://ecg-svc.say2-6team.local:8001
             - Name: LAB_SVC_URL
               Value: http://lab-svc.say2-6team.local:8003
+            # HAPI FHIR 서버 (hapi-fhir-ec2-stack, EC2 사설 IP). 인스턴스 교체 시 갱신 필요.
+            - Name: FHIR_BASE_URL
+              Value: !Ref HapiFhirUrl
             - Name: LOG_LEVEL
               Value: INFO
             - Name: OPS_DB_URL
-              Value: !Sub 
+              Value: !Sub
                 - 'postgresql://{{resolve:secretsmanager:${SecretArn}:SecretString:username}}:{{resolve:secretsmanager:${SecretArn}:SecretString:password}}@${Endpoint}:5432/central_db'
                 - SecretArn:
                     Fn::ImportValue: say2-6team-aurora-secret-arn
@@ -343,8 +374,15 @@ Resources:
               Value: !Ref AWS::Region
             - Name: BEDROCK_MODEL_ID
               Value: global.anthropic.claude-sonnet-4-6
+            # RAG — 코드는 RAG_SVC_URL 을 읽음 (RAG_SERVICE_URL 은 호환용 유지)
+            - Name: RAG_SVC_URL
+              Value: http://rag-svc.say2-6team.local:8000
             - Name: RAG_SERVICE_URL
               Value: http://rag-svc.say2-6team.local:8000
+          # FCM 푸시 — 서비스계정 JSON 을 Secrets Manager 에서 주입 (이미지/깃에 비밀 없음)
+          Secrets:
+            - Name: FCM_CREDENTIALS_JSON
+              ValueFrom: !Ref FcmSecretArn
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -393,6 +431,15 @@ Resources:
             - Name: PORT
               Value: "8002"
             - Name: DB_URL
+              Value: !Sub
+                - 'postgresql://{{resolve:secretsmanager:${SecretArn}:SecretString:username}}:{{resolve:secretsmanager:${SecretArn}:SecretString:password}}@${Endpoint}:5432/central_db'
+                - SecretArn:
+                    Fn::ImportValue: say2-6team-aurora-secret-arn
+                  Endpoint:
+                    Fn::ImportValue: say2-6team-aurora-endpoint
+            # 모달 서비스 코드(config.py)는 OPS_DB_URL 을 읽어 modal_results 자체 저장
+            # (중앙 장애 시에도 모달 결과 보존). DB_URL 과 동일 DSN.
+            - Name: OPS_DB_URL
               Value: !Sub
                 - 'postgresql://{{resolve:secretsmanager:${SecretArn}:SecretString:username}}:{{resolve:secretsmanager:${SecretArn}:SecretString:password}}@${Endpoint}:5432/central_db'
                 - SecretArn:
@@ -455,6 +502,15 @@ Resources:
                     Fn::ImportValue: say2-6team-aurora-secret-arn
                   Endpoint:
                     Fn::ImportValue: say2-6team-aurora-endpoint
+            # 모달 서비스 코드(config.py)는 OPS_DB_URL 을 읽어 modal_results 자체 저장
+            # (중앙 장애 시에도 모달 결과 보존). DB_URL 과 동일 DSN.
+            - Name: OPS_DB_URL
+              Value: !Sub
+                - 'postgresql://{{resolve:secretsmanager:${SecretArn}:SecretString:username}}:{{resolve:secretsmanager:${SecretArn}:SecretString:password}}@${Endpoint}:5432/central_db'
+                - SecretArn:
+                    Fn::ImportValue: say2-6team-aurora-secret-arn
+                  Endpoint:
+                    Fn::ImportValue: say2-6team-aurora-endpoint
             - Name: AWS_REGION
               Value: !Ref AWS::Region
           LogConfiguration:
@@ -505,6 +561,15 @@ Resources:
             - Name: LOG_LEVEL
               Value: INFO
             - Name: DB_URL
+              Value: !Sub
+                - 'postgresql://{{resolve:secretsmanager:${SecretArn}:SecretString:username}}:{{resolve:secretsmanager:${SecretArn}:SecretString:password}}@${Endpoint}:5432/central_db'
+                - SecretArn:
+                    Fn::ImportValue: say2-6team-aurora-secret-arn
+                  Endpoint:
+                    Fn::ImportValue: say2-6team-aurora-endpoint
+            # 모달 서비스 코드(config.py)는 OPS_DB_URL 을 읽어 modal_results 자체 저장
+            # (중앙 장애 시에도 모달 결과 보존). DB_URL 과 동일 DSN.
+            - Name: OPS_DB_URL
               Value: !Sub
                 - 'postgresql://{{resolve:secretsmanager:${SecretArn}:SecretString:username}}:{{resolve:secretsmanager:${SecretArn}:SecretString:password}}@${Endpoint}:5432/central_db'
                 - SecretArn:

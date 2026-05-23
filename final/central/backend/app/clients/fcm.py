@@ -38,18 +38,25 @@ def init() -> None:
         return
     _initialized = True  # 한 번만 시도
 
+    # 자격증명 소스: ① FCM_CREDENTIALS_JSON 환경변수(Secrets Manager 주입, JSON 원문)
+    #               ② GOOGLE_APPLICATION_CREDENTIALS 파일 경로 (로컬/하위호환)
+    cred_json = os.environ.get("FCM_CREDENTIALS_JSON")
     cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if not cred_path:
-        logger.info("[fcm] GOOGLE_APPLICATION_CREDENTIALS 미설정 — 푸시 비활성화 (no-op)")
+    if not cred_json and not cred_path:
+        logger.info("[fcm] FCM_CREDENTIALS_JSON / GOOGLE_APPLICATION_CREDENTIALS 미설정 — 푸시 비활성화 (no-op)")
         return
-    if not os.path.exists(cred_path):
+    if cred_path and not cred_json and not os.path.exists(cred_path):
         logger.warning("[fcm] credentials 파일 없음 (%s) — 푸시 비활성화", cred_path)
         return
 
     try:
         import firebase_admin
         from firebase_admin import credentials, messaging
-        cred = credentials.Certificate(cred_path)
+        if cred_json:
+            import json as _json
+            cred = credentials.Certificate(_json.loads(cred_json))
+        else:
+            cred = credentials.Certificate(cred_path)
         _app = firebase_admin.initialize_app(cred)
         _messaging = messaging
         logger.info("[fcm] firebase-admin 초기화 완료 (project=%s)", _app.project_id)

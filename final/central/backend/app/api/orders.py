@@ -134,9 +134,19 @@ async def _execute_modal_and_complete(sr_id: str, sr: dict):
             except Exception as e:
                 logger.warning(f"[prognosis] 통합 실패 (LAB 본 응답은 유지): {e}")
 
-        # ⭐ modal_results 저장은 각 모달 서비스가 직접 처리.
-        #    오케스트레이터는 저장하지 않음 (중복 방지).
-        #    모달 서비스가 /predict 응답 전 encounter_id 기준으로 UPSERT.
+        # ⭐ modal_results 저장 — 오케스트레이터가 응답을 받은 직후 UPSERT.
+        #    (모달 서비스가 직접 저장하지 않는 배포 구성이므로 중앙에서 보장.
+        #     UPSERT라 모달이 저장하더라도 중복/충돌 없음 → 멱등.)
+        try:
+            from app.db import modal_results as ops_modal_results
+            await ops_modal_results.insert_modal_result(
+                encounter_id=encounter_id,
+                modality=modality,
+                service_request_id=sr_id,
+                raw_response=modal_result,
+            )
+        except Exception as e:
+            logger.warning("[modal_results] 저장 실패 (enc=%s %s): %s", encounter_id, modality, e)
 
         # (FHIR Observation 저장 로직 제거)
         # AI 추론 결과(확실하지 않은 원시값)는 FHIR 표준에 반영하지 않고,
@@ -359,9 +369,13 @@ async def _build_modal_payload(
 
     return {
         "patient_id": patient_id,
+        # 최상위 encounter_id — 모달 서비스(PredictRequest.encounter_id)가 직접 읽어
+        # 자체적으로 modal_results UPSERT (중앙 장애 시에도 결과 보존).
+        "encounter_id": encounter_id,
         "patient_info": patient_info,
         "data": data,
-        "context": {"encounter_id": encounter_id},
+        # context 필드는 유지 (확장 컨텍스트용). encounter_id는 최상위로만 전달.
+        "context": {},
     }
 
 

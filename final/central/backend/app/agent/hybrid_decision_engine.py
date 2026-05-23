@@ -102,7 +102,12 @@ class HybridDecisionEngine:
         # Step 1: Initial modality selection
         if not self.inference_results:
             return self._initial_modality_selection()
-        
+
+        # Step 1.5: 임상 규칙 기반 후속 체이닝 (ECG 결과 → LAB 등) — ML보다 우선
+        clinical = self._followup_clinical_chain()
+        if clinical:
+            return clinical
+
         # Step 2: Get ML decision (stratified models)
         ml_decision = self._get_ml_decision()
         
@@ -133,7 +138,7 @@ class HybridDecisionEngine:
             }
         
         # Execute ML decision directly (argmax already applied in _interpret_ml_predictions)
-        return {
+        result = {
             'decision': action,
             'rationale': ml_decision['rationale'],
             'risk_level': self._assess_risk_level(),
@@ -141,7 +146,60 @@ class HybridDecisionEngine:
             'ml_scores': ml_decision['scores'],
             'decision_source': 'ml_argmax'
         }
-    
+        # CALL_NEXT_MODALITY일 때 실제 모달을 next_modalities로 노출 (체인 복구)
+        if action == 'CALL_NEXT_MODALITY' and ml_decision.get('next_modality'):
+            result['next_modalities'] = [ml_decision['next_modality']]
+        return result
+
+    def _followup_clinical_chain(self):
+        """
+        임상 규칙 기반 후속 모달 체이닝 (ML 보완, 데이터 부족/엣지 케이스 보강).
+
+        ECG 결괏값을 보고 임상적으로 이어서 필요한 검사를 결정한다.
+        - ECG 완료 & LAB 미완료 → LAB 권고
+          핵심 서사: "ECG 소견만으로는 ACS 확진/배제가 애매 → 혈액검사(Troponin)로 확정"
+          ECG 이상 소견 유무에 따라 판단 근거(rationale) 문구를 다르게 구성.
+
+        Returns:
+            decision dict (next_modalities 포함) 또는 None (해당 규칙 없음 → ML로 위임)
+        """
+        completed = set(self.modalities_completed)
+        ecg = self.results_by_modality.get('ECG')
+
+        # ── ECG → LAB : ECG 후 심근효소·전해질 확인 ──
+        if 'ECG' in completed and 'LAB' not in completed and ecg is not None:
+            finding = (ecg.get('finding') or '').strip()
+            risk = (ecg.get('risk_level') or '').lower()
+            normal_terms = {'', 'normal', 'sinus rhythm', 'normal sinus rhythm',
+                            'normal ecg', 'nsr', 'no abnormality'}
+            abnormal = (finding.lower() not in normal_terms) or \
+                       risk in ('high', 'urgent', 'critical', 'medium')
+
+            if abnormal:
+                rationale = (
+                    f"ECG에서 {finding or '비정상 소견'}이(가) 관찰되나, 이 소견만으로는 "
+                    f"ACS(급성 관상동맥 증후군) 확진이 어렵습니다. 혈액검사(Troponin·전해질)로 "
+                    f"심근 손상 여부를 확정 판단해야 합니다."
+                )
+                risk_level = 'high' if risk in ('high', 'urgent', 'critical') else 'medium'
+            else:
+                rationale = (
+                    "ECG 소견이 비특이적이라 ECG 단독으로는 ACS 확진/배제가 애매합니다. "
+                    "혈액검사(Troponin)로 심근 손상 여부를 확정 판단해야 합니다."
+                )
+                risk_level = 'medium'
+
+            return {
+                'decision': 'CALL_NEXT_MODALITY',
+                'next_modalities': ['LAB'],
+                'rationale': rationale,
+                'risk_level': risk_level,
+                'confidence_summary': self._get_confidence_summary(),
+                'decision_source': 'clinical_chain_ecg_to_lab',
+            }
+
+        return None
+
     def _get_ml_decision(self):
         """
         Get ML model predictions using stratified models.
@@ -194,14 +252,15 @@ class HybridDecisionEngine:
                 predictions[label] = score
             
             # Determine action based on predictions
-            action, confidence, rationale = self._interpret_ml_predictions(predictions, is_initial)
-            
+            action, confidence, rationale, next_modality = self._interpret_ml_predictions(predictions, is_initial)
+
             return {
                 'action': action,
                 'confidence': confidence,
                 'rationale': rationale,
                 'scores': predictions,
-                'model_type': model_type
+                'model_type': model_type,
+                'next_modality': next_modality,
             }
         
         except Exception as e:
@@ -344,38 +403,42 @@ class HybridDecisionEngine:
         - Fixed thresholds (0.50, 0.90) don't work for imbalanced multi-label data
         
         Returns:
-            (action, confidence, rationale) tuple
+            (action, confidence, rationale, next_modality) tuple
+            next_modality is set only for CALL_NEXT_MODALITY, else None
         """
         if not predictions:
-            return ('GENERATE_REPORT', 0.5, 'No predictions available')
-        
+            return ('GENERATE_REPORT', 0.5, 'No predictions available', None)
+
         # Find highest scoring action
         max_label = max(predictions, key=predictions.get)
         max_score = predictions[max_label]
-        
+
         # Minimum confidence threshold (prevent random guessing)
         MIN_CONFIDENCE = 0.02  # 2% - lower than rarest class (order_ecg 0.3%)
-        
+
         if max_score < MIN_CONFIDENCE:
             return (
                 'GENERATE_REPORT',
                 max_score,
-                f"All scores too low (max: {max_score:.2%}), defaulting to report"
+                f"All scores too low (max: {max_score:.2%}), defaulting to report",
+                None,
             )
-        
+
         # Map label to action
         if max_label == 'stop':
             return (
                 'GENERATE_REPORT',
                 max_score,
-                f"ML: stop ({max_score:.2%}) - sufficient information gathered"
+                f"ML: stop ({max_score:.2%}) - sufficient information gathered",
+                None,
             )
-        
+
         elif max_label == 'need_reasoning':
             return (
                 'NEED_REASONING',
                 max_score,
-                f"ML: need_reasoning ({max_score:.2%}) - complex case requires LLM"
+                f"ML: need_reasoning ({max_score:.2%}) - complex case requires LLM",
+                None,
             )
         
         elif max_label in ['order_ecg', 'order_cxr', 'order_lab']:
@@ -397,7 +460,8 @@ class HybridDecisionEngine:
                     return (
                         'CALL_NEXT_MODALITY',
                         best_score,
-                        f"ML: {best_modality} ({best_score:.2%}) - {modality} already done"
+                        f"ML: {best_modality} ({best_score:.2%}) - {modality} already done",
+                        best_modality,
                     )
                 else:
                     # All modalities completed, check stop vs need_reasoning
@@ -405,26 +469,30 @@ class HybridDecisionEngine:
                         return (
                             'NEED_REASONING',
                             predictions['need_reasoning'],
-                            f"ML: need_reasoning ({predictions['need_reasoning']:.2%}) - all tests done"
+                            f"ML: need_reasoning ({predictions['need_reasoning']:.2%}) - all tests done",
+                            None,
                         )
                     else:
                         return (
                             'GENERATE_REPORT',
                             predictions.get('stop', max_score),
-                            "ML: All modalities completed, generating report"
+                            "ML: All modalities completed, generating report",
+                            None,
                         )
-            
+
             return (
                 'CALL_NEXT_MODALITY',
                 max_score,
-                f"ML: {modality} ({max_score:.2%})"
+                f"ML: {modality} ({max_score:.2%})",
+                modality,
             )
-        
+
         # Unknown label
         return (
             'GENERATE_REPORT',
             max_score,
-            f"ML: unknown label '{max_label}' ({max_score:.2%}), defaulting to report"
+            f"ML: unknown label '{max_label}' ({max_score:.2%}), defaulting to report",
+            None,
         )
     
     # ========== Data-driven methods ==========

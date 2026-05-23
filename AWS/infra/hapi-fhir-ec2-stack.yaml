@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  say2-6team HAPI FHIR Server on EC2.
+  team VPC(vpc-0d70841e933a31400) 퍼블릭 서브넷에 EC2 + Docker로 HAPI FHIR 실행.
+  - 인바운드 8080: hapi-sg(=central-sg/orchestrator 만 허용) 유지 → 외부 직접 접근 차단
+  - 인터넷 egress: 전용 egress SG(이 스택에서 생성)로 docker pull
+  - Aurora hapi DB(hapi-db-stack): hapi-sg egress 5432 → aurora-sg 로 연결
+  - DB 자격증명은 배포 시점 {{resolve:secretsmanager}}로 user-data에 주입(런타임 조회 불필요)
+  - IAM 인스턴스 프로파일은 기존 say2-6team-hapi-ec2-profile 재사용(SSM 관리용)
+  - orchestrator는 FHIR_BASE_URL=http://<PrivateIp>:8080/fhir 로 호출 (같은 VPC 사설 IP)
+  관리는 SSH 미개방, SSM Session Manager 사용.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: say2-6team
+  InstanceType:
+    Type: String
+    Default: t3.large
+  HapiImage:
+    Type: String
+    Default: hapiproject/hapi:latest
+  InstanceProfileName:
+    Type: String
+    Default: say2-6team-hapi-ec2-profile
+    Description: 기존 인스턴스 프로파일 (SSM + secrets) 재사용
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  # 인터넷 egress 전용 SG (docker pull). 인바운드 없음.
+  HapiEgressSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-hapi-ec2-egress-sg'
+      GroupDescription: HAPI EC2 internet egress (docker pull)
+      VpcId: !ImportValue say2-6team-vpc-id
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: all egress for docker pull / internet
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-hapi-ec2-egress-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+
+  HapiInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AmiId
+      IamInstanceProfile: !Ref InstanceProfileName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          AssociatePublicIpAddress: true
+          SubnetId: !ImportValue say2-6team-public-subnet-a
+          GroupSet:
+            - !ImportValue say2-6team-hapi-sg
+            - !Ref HapiEgressSg
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          REGION=${AWS::Region}
+          dnf install -y docker
+          systemctl enable --now docker
+          # AWS CLI 보장 (AL2023 기본 포함; 없으면 설치)
+          if ! command -v aws >/dev/null 2>&1; then
+            dnf install -y awscli2 >/dev/null 2>&1 || { cd /tmp && curl -sL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o a.zip && dnf install -y unzip >/dev/null 2>&1 && unzip -q a.zip && ./aws/install; }
+          fi
+          # hapi DB 자격증명 — 인스턴스 역할로 Secrets Manager 조회 (UserData는 {{resolve}} 미지원)
+          SECRET=$(aws secretsmanager get-secret-value --secret-id say2-6team/hapi-credentials --region "$REGION" --query SecretString --output text)
+          DB_USER=$(echo "$SECRET" | python3 -c "import json,sys;print(json.load(sys.stdin)['username'])")
+          DB_PASS=$(echo "$SECRET" | python3 -c "import json,sys;print(json.load(sys.stdin)['password'])")
+          DB_HOST=$(echo "$SECRET" | python3 -c "import json,sys;print(json.load(sys.stdin)['host'])")
+          docker pull ${HapiImage}
+          # rds.force_ssl=1 → JDBC에 sslmode=require (서버 SSL 강제, 인증서 검증 없음)
+          docker run -d --restart always --name hapi -p 8080:8080 \
+            --log-driver=awslogs --log-opt awslogs-region="$REGION" --log-opt awslogs-group=/drai/hapi-fhir --log-opt awslogs-create-group=true \
+            -e JAVA_OPTS="-Xmx3g" \
+            -e "spring.datasource.url=jdbc:postgresql://$DB_HOST:5432/hapi?sslmode=require" \
+            -e "spring.datasource.username=$DB_USER" \
+            -e "spring.datasource.password=$DB_PASS" \
+            -e spring.datasource.driverClassName=org.postgresql.Driver \
+            -e spring.jpa.properties.hibernate.dialect=ca.uhn.fhir.jpa.model.dialect.HapiFhirPostgresDialect \
+            -e hapi.fhir.fhir_version=R4 \
+            ${HapiImage}
+      PropagateTagsToVolumeOnCreation: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-hapi-fhir'
+        - Key: Project
+          Value: !Ref ProjectName
+        # SKKU_TagEnforcementPolicy: ec2:RunInstances 는 project=pre-*team 태그 필수
+        - Key: project
+          Value: pre-say2-6team
+
+Outputs:
+  InstanceId:
+    Value: !Ref HapiInstance
+  PrivateIp:
+    Description: orchestrator FHIR_BASE_URL 에 사용할 사설 IP
+    Value: !GetAtt HapiInstance.PrivateIp
+  FhirBaseUrl:
+    Value: !Sub
+      - 'http://${Ip}:8080/fhir'
+      - Ip: !GetAtt HapiInstance.PrivateIp

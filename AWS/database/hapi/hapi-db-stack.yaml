@@ -209,6 +209,16 @@ Resources:
                       else:
                           raise
 
+                  # Step 1.5: 마스터가 hapi_user 소유 DB를 만들려면 그 역할의 멤버여야 함
+                  # (PostgreSQL: CREATE DATABASE ... OWNER role 은 SET ROLE 권한 필요)
+                  # GRANT는 멱등 — 이미 멤버여도 에러 없음.
+                  rds.execute_statement(
+                      resourceArn=cluster_arn,
+                      secretArn=master_secret_arn,
+                      database='central_db',
+                      sql=f"GRANT {username} TO CURRENT_USER;"
+                  )
+
                   # Step 2: CREATE DATABASE hapi OWNER hapi_user
                   try:
                       rds.execute_statement(
