@@ -3,6 +3,7 @@
 // 백엔드(localhost:8000)가 안 떠 있으면 모든 함수가 null 을 반환 → 호출부에서 demoStore 폴백.
 
 import type { ModalRawResponse } from "../../components/modal-views/ModalViews";
+import { CHIEF_COMPLAINT_LABELS, type ChiefComplaint } from "../../types/triage";
 
 /* ── 타입 ───────────────────────────────────────────────── */
 export interface TriageVitalsInput {
@@ -20,6 +21,9 @@ export interface TriageSubmitInput {
   sex: "M" | "F";
   vitals: TriageVitalsInput;
   chief: string;
+  // 영문 주호소 코드 — 백엔드 CC Map(영문 MIMIC) 라우팅용. 데모 케이스에서 전달.
+  // 있으면 chief_complaint.text=영문(CC Map 매칭), chief(한국어)는 detail로.
+  chiefCode?: ChiefComplaint;
   pastHistory: string[];
   allergies?: string;
   medications?: string;
@@ -92,6 +96,10 @@ export async function submitTriage(
   input: TriageSubmitInput,
 ): Promise<TriageSubmitResult | null> {
   const fhirGender = input.sex === "M" ? "male" : input.sex === "F" ? "female" : "unknown";
+  // CC Map은 영문 MIMIC 기준 — 영문 코드가 있으면 text=영문(라우팅), 한국어 chief는 detail로.
+  // 코드가 없으면(수동 입력) 기존대로 chief를 text로 사용.
+  const ccText = input.chiefCode ? CHIEF_COMPLAINT_LABELS[input.chiefCode].en : input.chief || "other";
+  const ccDetail = input.chiefCode ? input.chief || null : null;
   const payload = {
     patient: { name: input.name, age: input.age, gender: fhirGender },
     vitals: {
@@ -105,8 +113,8 @@ export async function submitTriage(
       gcs: 15,
     },
     chief_complaint: {
-      text: input.chief || "other",
-      detail: null,
+      text: ccText,
+      detail: ccDetail,
       onset_minutes_ago: 0,
     },
     past_history: input.pastHistory.map((code) => ({ text: code })),
@@ -152,6 +160,25 @@ export async function getReportByEncounter(
   encounterId: string,
 ): Promise<ReportRow | null> {
   return jsonFetch<ReportRow>(`/reports/by-encounter/${encounterId}`);
+}
+
+/* ── GET /encounters/list — 실제 등록된 환자(워크리스트) 상태 ── */
+export interface EncounterListItem {
+  encounter_id: string;
+  subject_id: string | null;
+  patient_name: string | null;
+  chief_complaint: string | null;
+  report_status: ReportStatus | null;   // null이면 아직 소견서 없음
+  ai_risk_level: string | null;
+}
+export async function listEncounters(
+  status = "active",
+  limit = 50,
+): Promise<EncounterListItem[] | null> {
+  const data = await jsonFetch<EncounterListItem[]>(
+    `/encounters/list?status=${status}&limit=${limit}`,
+  );
+  return Array.isArray(data) ? data : null;
 }
 
 /* ── PATCH /reports/{id}/review — 의사 검토 (status → reviewed) ── */
@@ -202,49 +229,7 @@ export async function approveOrder(srId: string): Promise<boolean> {
   return !!res;
 }
 
-/* ── GET /ops/health — 모달 서비스 개별 health 상태 ─────────── */
-export interface ModalHealthStatus {
-  ECG: boolean;
-  CXR: boolean;
-  LAB: boolean;
-}
-
-export async function checkModalHealth(): Promise<ModalHealthStatus> {
-  const res = await jsonFetch<ModalHealthStatus>("/ops/health");
-  // 백엔드 미가동 시 전부 true로 폴백 (기존 동작 유지)
-  return res ?? { ECG: true, CXR: true, LAB: true };
-}
-
-/* ── POST /orders/manual-findings — 모달 장애 시 의사 수기 입력 전달 ── */
-export interface ManualFindingsInput {
-  encounterId: string;
-  modality: ModalKey;
-  findings: string;          // 의사 서술 소견
-  ecgMeasurements?: {        // ECG 전용 수치 (선택)
-    hr?: string;
-    pr?: string;
-    qrs?: string;
-    qt?: string;
-  };
-}
-
-export async function submitManualFindings(
-  input: ManualFindingsInput,
-): Promise<boolean> {
-  const res = await jsonFetch<{ status?: string }>("/orders/manual-findings", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      encounter_id: input.encounterId,
-      modality: input.modality,
-      findings: input.findings,
-      ecg_measurements: input.ecgMeasurements ?? null,
-    }),
-  });
-  return !!res;
-}
-
-
+/* ── POST /orders/request — 의사 직접 오더 (AI 권고와 무관) ── */
 export async function requestOrder(
   encounterId: string,
   patientId: string,

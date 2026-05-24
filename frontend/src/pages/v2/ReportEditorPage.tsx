@@ -13,12 +13,11 @@ import {
   findPatient,
   setLocalReportStatus, getLocalReportStatus,
   setLocalReportEdits, getLocalReportEdits,
-  setLocalReportSignature, getLocalReportSignature,
   type DemoPatient,
 } from "../../lib/v2/demoStore";
 import { useAuth, canEditReport } from "../../lib/v2/auth";
 import {
-  getModalResults, generateReport, getReportByEncounter, reviewReport, signReport,
+  getModalResults, generateReport, getReportByEncounter, signReport,
   type ModalResults, type ReportStatus,
 } from "../../lib/v2/api";
 import { CXRView, ECGView, LabView } from "../../components/modal-views/ModalViews";
@@ -77,7 +76,6 @@ export default function ReportEditorPage() {
   const [reportStatus, setReportStatus] = useState<ReportStatus>(
     () => getLocalReportStatus(id) ?? "preliminary",
   );
-  const initialSignature = getLocalReportSignature(id) ?? "";
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -135,7 +133,7 @@ export default function ReportEditorPage() {
     <AppShell notifications={3}>
       {/* 4-컬럼: 환자정보 · 검사결과 · AI 판독결과 · AI 종합소견 — 세로 꽉 채움 */}
       <div className="max-w-[1800px] mx-auto px-5 py-4 grid grid-cols-1 lg:grid-cols-[390px_1fr_1fr_1.1fr] gap-4 items-stretch min-h-[calc(100vh-5rem)]">
-        <PatientInfoSidebar patient={patient} className="h-full lg:self-start lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)]" />
+        <PatientInfoSidebar patient={patient} className="lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto" />
         <PaneExamResults patient={patient} modalResults={modalResults} />
         <PaneAIAnalysis patient={patient} />
         <PaneAISummary
@@ -144,7 +142,6 @@ export default function ReportEditorPage() {
           aiNarrative={aiNarrative}
           reportId={reportId}
           reportStatus={reportStatus}
-          initialSignature={initialSignature}
           onGoToReports={() => nav("/demo/reports")}
         />
       </div>
@@ -818,24 +815,21 @@ function PaneAIAnalysis({ patient }: { patient: DemoPatient }) {
 /* ═════════════════════════════════════════════════════════
    PANE 3 — AI 종합소견 (탭 + 편집 + 서명)
    ═════════════════════════════════════════════════════════ */
-// 소견서 진행 단계 — 초안 → 검토 → 서명 → EMR 전송
+// 소견서 진행 단계 — 초안 → 소견 확정·EMR 전송 (서명 단계 없음)
 type StepKey = "preliminary" | "reviewed" | "signed" | "emr";
 const STATUS_STEPS: { key: StepKey; label: string }[] = [
   { key: "preliminary", label: "초안" },
-  { key: "reviewed",    label: "검토" },
-  { key: "signed",      label: "서명" },
-  { key: "emr",         label: "EMR 전송" },
+  { key: "signed",      label: "소견 확정 · EMR 전송" },
 ];
 
 function PaneAISummary({
-  patient, canEdit, aiNarrative, reportId, reportStatus, initialSignature, onGoToReports,
+  patient, canEdit, aiNarrative, reportId, reportStatus, onGoToReports,
 }: {
   patient: DemoPatient;
   canEdit: boolean;
   aiNarrative: string | null;
   reportId: number | null;
   reportStatus: ReportStatus;
-  initialSignature: string;
   onGoToReports: () => void;
 }) {
   const rec = patient.recommendation;
@@ -871,41 +865,29 @@ function PaneAISummary({
 
   const [edited, setEdited] = useState(aiDraft);
   const [status, setStatus] = useState<ReportStatus>(reportStatus);
-  const [signature, setSignature] = useState(initialSignature);
   const [busy, setBusy] = useState(false);
   const [emrPopup, setEmrPopup] = useState(false);
-  // 서명 완료 = 초안·검토·서명·EMR전송 4단계 모두 완료 처리
-  const stepIdx = status === "signed" ? 3 : STATUS_STEPS.findIndex((s) => s.key === status);
+  // 확정(=signed) 시 마지막 단계, 그 외(초안/검토)는 0단계
+  const stepIdx = status === "signed" ? 1 : 0;
 
   // 백엔드에서 로드한 상태/본문 동기화
   useEffect(() => { setStatus(reportStatus); }, [reportStatus]);
   useEffect(() => { if (aiNarrative) setEdited(aiNarrative); }, [aiNarrative]);
   // 로컬 상태 캐시 — 환자 목록/종합소견서 페이지가 즉시 반영하도록.
-  // "preliminary"는 캐시 안 함: ReportEditor 가 마운트만 해도 leak 되어 환자 목록에
-  // "작성 가능"으로 잘못 표시되는 문제 방지. 검토·서명 등 실제 상태 전이만 캐시.
+  // "preliminary"는 캐시 안 함(마운트만 해도 leak 방지). 확정 등 실제 전이만 캐시.
   useEffect(() => {
     if (status !== "preliminary") setLocalReportStatus(patient.id, status);
   }, [patient.id, status]);
   useEffect(() => { setLocalReportEdits(patient.id, edited); }, [patient.id, edited]);
-  useEffect(() => {
-    if (signature.trim()) setLocalReportSignature(patient.id, signature);
-  }, [patient.id, signature]);
 
-  // 초안 상태에선 수정 불가 — '소견 검토'를 눌러 검토 상태로 진입해야 편집 가능
-  const editable = canEdit && status === "reviewed";
-  const canFinalize = canEdit && status === "reviewed" && signature.trim().length > 0 && !busy;
+  // 확정 전까지 본문 편집 가능 (별도 검토 단계 없음)
+  const editable = canEdit && status !== "signed";
+  const canConfirm = canEdit && status !== "signed" && !busy;
 
-  // 소견 검토 — 백엔드 PATCH /reports/{id}/review (백엔드 미연동 시 로컬 전이)
-  async function handleReview() {
+  // 소견 확정 & EMR 전송 — 백엔드 POST /reports/{id}/sign → status signed + FHIR final(EMR)
+  async function handleConfirm() {
     setBusy(true);
-    if (reportId != null) await reviewReport(reportId, edited);
-    setStatus("reviewed");
-    setBusy(false);
-  }
-  // 소견 확정 — 백엔드 POST /reports/{id}/sign → FHIR final = EMR 전송
-  async function handleSign() {
-    setBusy(true);
-    if (reportId != null) await signReport(reportId, signature.trim() || "physician", edited);
+    if (reportId != null) await signReport(reportId, "physician", edited);
     setStatus("signed");
     setBusy(false);
     setEmrPopup(true); // EMR 전송 안내 팝업 — 페이지 이동 없음
@@ -928,33 +910,17 @@ function PaneAISummary({
             <Printer className="h-3.5 w-3.5" />
           </button>
           <button
-            disabled={!canEdit || status !== "preliminary" || busy}
-            onClick={handleReview}
+            disabled={!canConfirm}
+            onClick={handleConfirm}
+            title={status === "signed" ? "이미 소견 확정·EMR 전송 완료" : "소견을 확정하고 EMR로 전송합니다"}
             className={cn(
               "h-7 px-3 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap",
-              status === "preliminary" && canEdit && !busy
-                ? "bg-brand-600 text-white hover:bg-brand-700"
-                : "bg-slate-200 text-slate-400 dark:bg-vuno-bg dark:text-vuno-dim cursor-not-allowed",
-            )}
-          >
-            소견 검토
-          </button>
-          <button
-            disabled={!canFinalize}
-            onClick={handleSign}
-            title={
-              status === "signed" ? "이미 서명·EMR 전송 완료" :
-              status !== "reviewed" ? "먼저 '소견 검토'를 진행하세요" :
-              !signature.trim() ? "서명 입력 후 확정할 수 있습니다" : ""
-            }
-            className={cn(
-              "h-7 px-3 rounded-lg text-[11px] font-bold transition-colors whitespace-nowrap",
-              canFinalize
+              canConfirm
                 ? "bg-slate-900 text-white hover:bg-black dark:bg-brand-600 dark:hover:bg-brand-700"
                 : "bg-slate-200 text-slate-400 dark:bg-vuno-bg dark:text-vuno-dim cursor-not-allowed",
             )}
           >
-            소견 확정 · EMR 전송
+            {status === "signed" ? "확정 완료" : "소견 확정 & EMR 전송"}
           </button>
         </div>
       }
@@ -980,9 +946,7 @@ function PaneAISummary({
           </div>
         ))}
         <span className="ml-auto text-[10px] text-slate-500 dark:text-vuno-muted whitespace-nowrap">
-          {status === "preliminary" ? "AI 생성 · 검토 전" :
-           status === "reviewed"    ? "의사 검토 중" :
-                                      "서명 · EMR 전송 완료"}
+          {status === "signed" ? "소견 확정 · EMR 전송 완료" : "AI 생성 · 확정 전 (편집 가능)"}
         </span>
       </div>
 
@@ -1006,7 +970,7 @@ function PaneAISummary({
           editable={editable}
           onEditedChange={setEdited}
           status={status}
-          signature={signature}
+          signature=""
         />
       </div>
 
@@ -1016,28 +980,9 @@ function PaneAISummary({
         </div>
       )}
 
-      {canEdit && status === "preliminary" && (
+      {canEdit && status !== "signed" && (
         <div className="mt-2 text-[10px] text-slate-600 dark:text-vuno-muted bg-slate-50 dark:bg-vuno-bg border border-slate-200 dark:border-vuno-border px-2 py-1.5">
-          상단 <b className="text-slate-800 dark:text-white">소견 검토</b> 버튼을 누르면 소견서 본문을 수정할 수 있습니다.
-        </div>
-      )}
-
-      {canEdit && status === "reviewed" && (
-        <div className="mt-2 pt-2 border-t border-slate-200 dark:border-vuno-border">
-          <div className="flex items-center gap-2">
-            <PenLine className="h-3.5 w-3.5 text-slate-400 dark:text-vuno-dim flex-shrink-0" />
-            <input
-              value={signature}
-              onChange={(e) => setSignature(e.target.value)}
-              placeholder="담당 의사 성명 입력 (예: 정OO)"
-              className="flex-1 h-7 px-2 text-[11px] border border-slate-300 dark:border-vuno-border bg-white dark:bg-vuno-bg dark:text-white focus:outline-none focus:border-vuno-cyan"
-            />
-          </div>
-          <div className="mt-1 text-[10px] text-slate-500 dark:text-vuno-muted">
-            {signature.trim()
-              ? "서명 입력 완료 — 상단 소견 확정 버튼으로 EMR 전송할 수 있습니다."
-              : "서명을 입력해야 소견 확정이 활성화됩니다."}
-          </div>
+          소견서 본문을 직접 수정한 뒤 상단 <b className="text-slate-800 dark:text-white">소견 확정 &amp; EMR 전송</b> 버튼을 누르면 확정·전송됩니다.
         </div>
       )}
     </Pane>
@@ -1048,7 +993,7 @@ function PaneAISummary({
       recommendation={rec}
       narrative={edited}
       status={status}
-      signature={signature}
+      signature=""
     />
 
     {/* EMR 전송 완료 팝업 */}

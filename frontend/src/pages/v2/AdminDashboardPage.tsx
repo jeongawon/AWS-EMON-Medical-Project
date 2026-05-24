@@ -108,7 +108,7 @@ export default function AdminDashboardPage() {
     <AppShell notifications={critCount + warnCount}>
       <div className="bg-slate-100 text-slate-900 dark:bg-vuno-bg dark:text-white min-h-[calc(100vh-3.5rem)] lg:grid lg:grid-cols-[390px_1fr] lg:items-stretch">
         {/* 좌: 현재 환자 정보 사이드바 (고정) */}
-        <PatientInfoSidebar patient={getCurrentPatient()} className="hidden lg:block lg:self-start lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)]" />
+        <PatientInfoSidebar patient={getCurrentPatient()} className="hidden lg:block lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-y-auto" />
         <div className="min-w-0">
         <div className="max-w-[1500px] mx-auto px-6 py-6 space-y-5">
 

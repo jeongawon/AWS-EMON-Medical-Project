@@ -75,13 +75,12 @@ export default function PatientResultsPage() {
 
   return (
     <AppShell notifications={3}>
-      <div className="bg-slate-100 text-slate-900 dark:bg-vuno-bg dark:text-white min-h-[calc(100vh-3.5rem)]">
-        <div className="max-w-[1700px] mx-auto px-5 py-5 grid grid-cols-1 lg:grid-cols-[390px_1fr] gap-5 items-stretch min-h-[calc(100vh-3.5rem)]">
-          {/* ── 좌: 환자 정보 ── */}
-          <PatientInfoSidebar patient={patient} className="h-full lg:self-start lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)]" />
+      <div className="bg-slate-100 text-slate-900 dark:bg-vuno-bg dark:text-white min-h-[calc(100vh-3.5rem)] lg:grid lg:grid-cols-[390px_minmax(0,1fr)] lg:h-[calc(100vh-3.5rem)] lg:items-stretch lg:overflow-hidden">
+        {/* ── 좌: 환자 정보 (상단·좌측·하단 flush 도킹 · 의사 수정 가능) ── */}
+        <PatientInfoSidebar patient={patient} allowEdit className="lg:h-full lg:overflow-y-auto" />
 
-          {/* ── 우: AI 판독 검사결과 (ECG · CXR · LAB 3단락) ── */}
-          <section className="min-w-0">
+        {/* ── 우: AI 판독 검사결과 (ECG · CXR · LAB 3단락) ── */}
+        <section className="min-w-0 px-5 py-5 lg:h-full lg:overflow-hidden">
             <Card className="overflow-hidden h-full flex flex-col">
               <div className="px-4 py-2.5 border-b border-slate-200 dark:border-vuno-border bg-slate-50 dark:bg-vuno-bg flex items-center gap-2">
                 <span className="text-base font-bold text-slate-900 dark:text-white">AI 판독 검사결과</span>
@@ -143,8 +142,7 @@ export default function PatientResultsPage() {
                 </ResultSection>
               </div>
             </Card>
-          </section>
-        </div>
+        </section>
       </div>
 
       {/* CXR PACS 풀스크린 뷰어 */}
@@ -169,13 +167,13 @@ function ResultSection({ modality, status, children }: {
   const Icon = MODAL_ICON[modality];
   return (
     <div className="flex flex-col min-h-0 border border-slate-200 dark:border-vuno-border rounded-xl overflow-hidden bg-white dark:bg-vuno-surface">
-      <div className="px-3 py-2 border-b border-slate-200 dark:border-vuno-border bg-slate-50 dark:bg-vuno-bg flex items-center gap-2">
-        <span className="h-6 w-6 grid place-items-center rounded bg-brand-50 dark:bg-brand-500/15 text-brand-600 flex-shrink-0">
-          <Icon className="h-3.5 w-3.5" />
+      <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-vuno-border bg-slate-50 dark:bg-vuno-bg flex items-center gap-2.5">
+        <span className="h-8 w-8 grid place-items-center rounded-lg bg-brand-50 dark:bg-brand-500/15 text-brand-600 flex-shrink-0">
+          <Icon className="h-5 w-5" />
         </span>
         <div className="min-w-0">
-          <div className="text-[13px] font-bold text-slate-900 dark:text-white leading-none">{modality}</div>
-          <div className="text-[10px] text-slate-400 dark:text-vuno-dim mt-0.5">{MODAL_LABEL[modality]}</div>
+          <div className="text-[15px] font-bold text-slate-900 dark:text-white leading-none">{modality}</div>
+          <div className="text-[12px] text-slate-400 dark:text-vuno-dim mt-1">{MODAL_LABEL[modality]}</div>
         </div>
         <span className="ml-auto"><StatusBadge status={status} /></span>
       </div>
@@ -185,9 +183,9 @@ function ResultSection({ modality, status, children }: {
 }
 
 function StatusBadge({ status }: { status: ModalStatus }) {
-  if (status === "done") return <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">✓ 완료</span>;
-  if (status === "running") return <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">분석 중</span>;
-  return <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500 dark:bg-vuno-bg dark:text-vuno-muted">대기</span>;
+  if (status === "done") return <span className="px-2.5 py-1 rounded-md text-[12px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">✓ 완료</span>;
+  if (status === "running") return <span className="px-2.5 py-1 rounded-md text-[12px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">분석 중</span>;
+  return <span className="px-2.5 py-1 rounded-md text-[12px] font-bold bg-slate-100 text-slate-500 dark:bg-vuno-bg dark:text-vuno-muted">대기</span>;
 }
 
 /* ═══════════════════════════════════════════════════════════
