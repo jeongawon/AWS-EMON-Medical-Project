@@ -119,6 +119,16 @@ Resources:
           PortMappings:
             - ContainerPort: 8000
               Protocol: tcp
+
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - curl -f http://localhost:8000/health || exit 1
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 120
+            
           Environment:
             - Name: CHROMA_MODE
               Value: local
@@ -136,6 +146,10 @@ Resources:
               Value: central_db
             - Name: DB_PORT
               Value: "5432"
+            - Name: DB_POOL_MIN
+              Value: "1"
+            - Name: DB_POOL_MAX
+              Value: "5"
           Secrets:
             - Name: DB_HOST
               ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/aurora-credentials:host::"
@@ -194,8 +208,14 @@ Resources:
       ServiceName: !Sub "${ProjectName}-rag-svc"
       Cluster: !Ref ECSClusterArn
       TaskDefinition: !Ref RAGTaskDefinition
-      DesiredCount: 1
+      DesiredCount: 2  # 1->2 변경
       LaunchType: FARGATE
+
+      # AZ-a / AZ-c에 Task가 최대한 분산되도록 배치    
+      PlacementStrategies: 
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED
