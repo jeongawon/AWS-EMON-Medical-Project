@@ -1113,12 +1113,15 @@ Resources:
               #################################################################
               # RAG service responsibility:
               #   - Receive modal results or context from orchestrator/router.
-              #   - Perform RAG search (ChromaDB/Vector DB).
-              #   - Assemble prompt with retrieved context.
-              #   - Invoke Bedrock (Claude) for automated narrative generation.
-              #   - Write generated narrative to Aurora PostgreSQL.
+              #   - Generate retrieval query from modal results.
+              #   - Invoke Bedrock for query embedding generation.
+              #   - Perform RAG search (ChromaDB/Vector DB) for Top-K similar cases.
+              #   - Assemble final prompt with retrieved context and modal results.
+              #   - Invoke Bedrock (Claude) for final clinical opinion generation.
+              #   - Write generated diagnostic report to Aurora PostgreSQL.
+              #   - Return final opinion and storage status.
               #################################################################
-              - Sid: InvokeBedrockForNarrativeGeneration
+              - Sid: InvokeBedrockForEmbeddingAndGeneration
                 Effect: Allow
                 Action:
                   - bedrock:InvokeModel

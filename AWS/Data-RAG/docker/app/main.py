@@ -15,7 +15,7 @@ RAG API Server
   - router-svc (orchestrator 장애 시): session_id 포함 → session_id 기준으로 저장
 """
 
-import asyncio
+# Note: asyncio는 직접 사용하지 않음 (asyncpg/FastAPI가 내부적으로 처리)
 import os
 import json
 import time
@@ -132,6 +132,7 @@ class PatientInfo(BaseModel):
     age: int | None = None
     gender: str | None = None
     chief_complaint: str | None = None
+    present_illness: str | None = None  # 현병력: 발병 시점, 경과, 동반 증상
     vitals: dict[str, Any] | None = None
     past_history: list[str] | None = None
 
@@ -156,6 +157,8 @@ class GenerateRequest(BaseModel):
 
 
 class GenerateResponse(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     narrative: str
     model_used: str
     rag_fallback: bool
@@ -285,10 +288,12 @@ async def generate_narrative(req: GenerateRequest):
         logger.warning("[generate] ChromaDB search failed, proceeding with fallback: %s", e)
 
     # 3. 프롬프트 패키지 생성 + Bedrock 호출
-    # past_history, age, gender 등 patient_info를 additional_context로 전달
+    # past_history, age, gender, present_illness 등 patient_info를 additional_context로 전달
     additional_patient_context = {}
     if req.patient_info.past_history:
         additional_patient_context["past_history"] = req.patient_info.past_history
+    if req.patient_info.present_illness:
+        additional_patient_context["present_illness"] = req.patient_info.present_illness
     if req.patient_info.age:
         additional_patient_context["age"] = req.patient_info.age
     if req.patient_info.gender:
@@ -350,6 +355,8 @@ async def generate_narrative(req: GenerateRequest):
 # Helpers
 # ──────────────────────────────────────────────
 def _embed(text: str) -> list[float]:
+    import asyncio
+
     truncated = text[:8000]
     body = json.dumps({"inputText": truncated, "dimensions": EMBED_DIMENSIONS})
 
@@ -363,7 +370,10 @@ def _embed(text: str) -> list[float]:
             )
             return json.loads(resp["body"].read())["embedding"]
         except ClientError:
-            time.sleep(2 ** attempt)
+            if attempt < 3:
+                # 비동기 이벤트 루프를 블로킹하지 않도록 asyncio.sleep 사용 불가 (sync 함수)
+                # Fargate 단일 요청 수준에서는 time.sleep 허용
+                time.sleep(2 ** attempt)
 
     raise HTTPException(status_code=502, detail="Bedrock embedding failed")
 

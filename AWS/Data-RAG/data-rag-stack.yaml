@@ -14,8 +14,13 @@ Metadata:
     - Task downloads DB from S3 at startup (~372MB, ~30s).
     - DB updates are done offline (6-month cycle) and re-uploaded to S3.
     - ECSClusterArn parameter is PENDING until compute-stack provides it.
-    - RAG service performs query embedding generation, ChromaDB search, final Bedrock synthesis, and diagnostic report storage in Aurora.
+    - RAG service is responsible for the complete diagnostic report generation workflow.
+    - RAG receives modal results and patient context from orchestrator/router.
+    - RAG generates retrieval query, calls Bedrock for embedding, searches ChromaDB for Top-K similar cases.
+    - RAG assembles final prompt, calls Bedrock for clinical opinion generation, stores report in Aurora PostgreSQL.
+    - RAG returns final opinion and storage status.
     - Central Orchestrator handles modal orchestration and forwards prepared input to RAG /generate endpoint.
+    - RAG TaskDefinition includes DB connection secrets (DB_HOST, DB_USERNAME, DB_PASSWORD) for Aurora access.
 
 Parameters:
   ProjectName:
