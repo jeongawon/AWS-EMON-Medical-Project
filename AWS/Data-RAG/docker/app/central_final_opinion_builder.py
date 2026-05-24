@@ -1,5 +1,8 @@
 """
-final_opinion_builder.py
+RAG Service Final Opinion Builder
+
+파일명: central_final_opinion_builder.py
+(파일명의 'central'은 레거시 네이밍이며, 실제로는 RAG 서비스 내부 모듈임)
 
 RAG 서비스에서 최종 Bedrock 소견 생성을 담당하는 유틸 파일.
 
@@ -8,12 +11,16 @@ RAG 서비스에서 최종 Bedrock 소견 생성을 담당하는 유틸 파일.
 - RAG fallback 여부를 반영
 - Haiku / Sonnet 모델 라우팅
 - Bedrock Claude Messages API body 생성
-- 선택적으로 Bedrock 호출까지 수행
+- Bedrock 호출 수행
 - Claude 응답을 병원 소견서 필수 섹션 형식으로 후처리
+
+책임 분리:
+- RAG 검색용 query 생성: retrieval_query_builder.py
+- 최종 소견 생성 (이 파일): RAG 서비스 책임
+- Central Orchestrator: 모달 호출 및 결과 수집만 담당 (최종 Bedrock synthesis 담당하지 않음)
 
 중요:
 - 이 파일은 RAG 검색용 query 생성기가 아니다.
-- RAG 검색용 query는 retrieval_query_builder.py에서 만든다.
 - 이 파일은 RAG가 반환한 Top-K 근거와 모달 결과를 합쳐 "최종 소견"을 만들기 위한 RAG 서비스 내부 모듈이다.
 - Central Orchestrator는 더 이상 최종 Bedrock synthesis를 담당하지 않는다.
 """
