@@ -878,7 +878,10 @@ Resources:
                 Effect: Allow
                 Action:
                   - kms:Decrypt
-                Resource: !GetAtt ProjectKmsKey.Arn
+                Resource:
+                  - !GetAtt ProjectKmsKey.Arn
+                  # Aurora Secret은 별도 KMS 키로 암호화됨 (aurora-stack에서 생성)
+                  - arn:aws:kms:ap-northeast-2:666803869796:key/2a86278a-a0f3-48ae-b80a-e9f8242680c2
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-ecs-execution-role"
@@ -932,16 +935,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  # 우리 팀 버킷: 접두사(say2-6team-*) + 정확명(say2-6team, ECG 파형)
                   - !Sub "arn:aws:s3:::${ProjectName}-*"
                   - !Sub "arn:aws:s3:::${ProjectName}-*/*"
-                  - !Sub "arn:aws:s3:::${ProjectName}"
-                  - !Sub "arn:aws:s3:::${ProjectName}/*"
-                  # MIMIC 원본 (타팀 버킷, 동일 계정) — CXR 이미지 / LAB labevents
-                  - arn:aws:s3:::say1-pre-project-2
-                  - arn:aws:s3:::say1-pre-project-2/*
-                  - arn:aws:s3:::say1-pre-project-5
-                  - arn:aws:s3:::say1-pre-project-5/*
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-orchestrator-task-role"
@@ -989,16 +984,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  # 우리 팀 버킷: 접두사(say2-6team-*) + 정확명(say2-6team, ECG 파형)
                   - !Sub "arn:aws:s3:::${ProjectName}-*"
                   - !Sub "arn:aws:s3:::${ProjectName}-*/*"
-                  - !Sub "arn:aws:s3:::${ProjectName}"
-                  - !Sub "arn:aws:s3:::${ProjectName}/*"
-                  # MIMIC 원본 (타팀 버킷, 동일 계정) — CXR 이미지 / LAB labevents
-                  - arn:aws:s3:::say1-pre-project-2
-                  - arn:aws:s3:::say1-pre-project-2/*
-                  - arn:aws:s3:::say1-pre-project-5
-                  - arn:aws:s3:::say1-pre-project-5/*
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-ecg-task-role"
@@ -1046,16 +1033,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  # 우리 팀 버킷: 접두사(say2-6team-*) + 정확명(say2-6team, ECG 파형)
                   - !Sub "arn:aws:s3:::${ProjectName}-*"
                   - !Sub "arn:aws:s3:::${ProjectName}-*/*"
-                  - !Sub "arn:aws:s3:::${ProjectName}"
-                  - !Sub "arn:aws:s3:::${ProjectName}/*"
-                  # MIMIC 원본 (타팀 버킷, 동일 계정) — CXR 이미지 / LAB labevents
-                  - arn:aws:s3:::say1-pre-project-2
-                  - arn:aws:s3:::say1-pre-project-2/*
-                  - arn:aws:s3:::say1-pre-project-5
-                  - arn:aws:s3:::say1-pre-project-5/*
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-cxr-task-role"
@@ -1103,16 +1082,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  # 우리 팀 버킷: 접두사(say2-6team-*) + 정확명(say2-6team, ECG 파형)
                   - !Sub "arn:aws:s3:::${ProjectName}-*"
                   - !Sub "arn:aws:s3:::${ProjectName}-*/*"
-                  - !Sub "arn:aws:s3:::${ProjectName}"
-                  - !Sub "arn:aws:s3:::${ProjectName}/*"
-                  # MIMIC 원본 (타팀 버킷, 동일 계정) — CXR 이미지 / LAB labevents
-                  - arn:aws:s3:::say1-pre-project-2
-                  - arn:aws:s3:::say1-pre-project-2/*
-                  - arn:aws:s3:::say1-pre-project-5
-                  - arn:aws:s3:::say1-pre-project-5/*
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-lab-task-role"
@@ -1174,16 +1145,8 @@ Resources:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  # 우리 팀 버킷: 접두사(say2-6team-*) + 정확명(say2-6team, ECG 파형)
                   - !Sub "arn:aws:s3:::${ProjectName}-*"
                   - !Sub "arn:aws:s3:::${ProjectName}-*/*"
-                  - !Sub "arn:aws:s3:::${ProjectName}"
-                  - !Sub "arn:aws:s3:::${ProjectName}/*"
-                  # MIMIC 원본 (타팀 버킷, 동일 계정) — CXR 이미지 / LAB labevents
-                  - arn:aws:s3:::say1-pre-project-2
-                  - arn:aws:s3:::say1-pre-project-2/*
-                  - arn:aws:s3:::say1-pre-project-5
-                  - arn:aws:s3:::say1-pre-project-5/*
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-rag-task-role"
@@ -1390,8 +1353,6 @@ Resources:
         - ALLOW_REFRESH_TOKEN_AUTH
         # 관리자가 사번+임시비밀번호로 사용자 생성 후 초기 로그인 지원
         - ALLOW_ADMIN_USER_PASSWORD_AUTH
-        # 웹 프론트엔드 사번+비밀번호 직접 로그인 (USER_PASSWORD_AUTH, 브라우저)
-        - ALLOW_USER_PASSWORD_AUTH
       SupportedIdentityProviders:
         - COGNITO
         # SSO 추가 시 여기에 IdP name 추가 (예: "Google", "HospitalSAML")

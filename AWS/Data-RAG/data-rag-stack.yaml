@@ -208,14 +208,10 @@ Resources:
       ServiceName: !Sub "${ProjectName}-rag-svc"
       Cluster: !Ref ECSClusterArn
       TaskDefinition: !Ref RAGTaskDefinition
-      DesiredCount: 2  # 1->2 변경
+      DesiredCount: 2
       LaunchType: FARGATE
-
-      # AZ-a / AZ-c에 Task가 최대한 분산되도록 배치    
-      PlacementStrategies: 
-        - Type: spread
-          Field: attribute:ecs.availability-zone
-
+      # Fargate는 PlacementStrategies를 지원하지 않음
+      # 대신 여러 서브넷 지정 시 AWS가 자동으로 AZ 분산 배치
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: DISABLED

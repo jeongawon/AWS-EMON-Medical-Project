@@ -48,6 +48,7 @@ TOP_K_FINAL = 3
 MIN_SIMILARITY = 0.15
 
 # Aurora 연결 설정 — 환경변수로 주입 (Secrets Manager → Task Definition secrets)
+<<<<<<< HEAD
 DB_HOST = os.environ.get("DB_HOST")
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "central_db")
@@ -55,6 +56,11 @@ DB_USERNAME = os.environ.get("DB_USERNAME")
 DB_PASSWORD = os.environ.get("DB_PASSWORD")
 DB_POOL_MIN = int(os.environ.get("DB_POOL_MIN", "1"))
 DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "5"))
+=======
+OPS_DB_URL = os.environ.get("OPS_DB_URL")  # postgresql://user:pass@host:5432/central_db
+OPS_DB_POOL_MIN = int(os.environ.get("OPS_DB_POOL_MIN", "1"))
+OPS_DB_POOL_MAX = int(os.environ.get("OPS_DB_POOL_MAX", "5"))
+>>>>>>> f2c777e (RAG 앱 메인 파일명 변경 및 보안 스택 파일 수정)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger("rag-svc")
@@ -79,6 +85,7 @@ async def startup():
     collection = client.get_collection(name=COLLECTION_NAME)
     logger.info("[startup] ChromaDB loaded: %d documents", collection.count())
 
+<<<<<<< HEAD
     # Aurora 커넥션 풀 초기화 (DB 정보 없으면 DB 저장 비활성화)
     if DB_HOST and DB_USERNAME and DB_PASSWORD:
         try:
@@ -90,6 +97,15 @@ async def startup():
                 password=DB_PASSWORD,
                 min_size=DB_POOL_MIN,
                 max_size=DB_POOL_MAX,
+=======
+    # Aurora 커넥션 풀 초기화 (OPS_DB_URL 없으면 DB 저장 비활성화)
+    if OPS_DB_URL:
+        try:
+            _db_pool = await asyncpg.create_pool(
+                dsn=OPS_DB_URL,
+                min_size=OPS_DB_POOL_MIN,
+                max_size=OPS_DB_POOL_MAX,
+>>>>>>> f2c777e (RAG 앱 메인 파일명 변경 및 보안 스택 파일 수정)
                 command_timeout=10,
             )
             logger.info("[startup] Aurora DB pool ready")
@@ -97,7 +113,11 @@ async def startup():
             logger.warning("[startup] Aurora DB pool init failed (DB write disabled): %s", e)
             _db_pool = None
     else:
+<<<<<<< HEAD
         logger.warning("[startup] DB credentials not set — Aurora write disabled")
+=======
+        logger.warning("[startup] OPS_DB_URL not set — Aurora write disabled")
+>>>>>>> f2c777e (RAG 앱 메인 파일명 변경 및 보안 스택 파일 수정)
 
 
 @app.on_event("shutdown")
@@ -169,6 +189,7 @@ class GenerateResponse(BaseModel):
 # ──────────────────────────────────────────────
 @app.get("/health")
 def health():
+<<<<<<< HEAD
     """ECS health check용 — app alive + Chroma 로드 여부만 확인. DB 상태 무관."""
     return {
         "status": "ok",
@@ -185,6 +206,9 @@ def ready():
         "bedrock_client": bedrock_client is not None,
         "db_ready": _db_pool is not None,
     }
+=======
+    return {"status": "ok", "documents": collection.count() if collection else 0}
+>>>>>>> f2c777e (RAG 앱 메인 파일명 변경 및 보안 스택 파일 수정)
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -233,9 +257,14 @@ async def generate_narrative(req: GenerateRequest):
       4. 후처리 후 narrative 반환
       5. Aurora 저장:
          - encounter_id 있으면 → diagnostic_reports(encounter_id=...) UPSERT
+<<<<<<< HEAD
          - session_id 있으면  → diagnostic_reports(session_id=...) UPSERT (폴백 경로)
          - 둘 다 없으면       → 저장 스킵
          - DB 풀 없으면       → 저장 스킵 (DB 미설정 환경)
+=======
+         - session_id 있으면  → diagnostic_reports(session_id=...) UPSERT
+         - 둘 다 없으면       → 저장 스킵
+>>>>>>> f2c777e (RAG 앱 메인 파일명 변경 및 보안 스택 파일 수정)
     """
     if not req.modal_results and not req.patient_info.chief_complaint:
         raise HTTPException(
@@ -306,7 +335,11 @@ async def generate_narrative(req: GenerateRequest):
     #    - encounter_id 있으면 → diagnostic_reports(encounter_id=...) UPSERT
     #    - session_id 있으면  → diagnostic_reports(session_id=...) UPSERT (폴백 경로)
     #    - 둘 다 없으면       → 저장 스킵
+<<<<<<< HEAD
     #    - DB 풀 없으면       → 저장 스킵 (DB 미설정 환경)
+=======
+    #    - DB 풀 없으면       → 저장 스킵 (OPS_DB_URL 미설정 환경)
+>>>>>>> f2c777e (RAG 앱 메인 파일명 변경 및 보안 스택 파일 수정)
     stored = False
     if _db_pool and (req.encounter_id or req.session_id):
         stored = await _save_diagnostic_report(
