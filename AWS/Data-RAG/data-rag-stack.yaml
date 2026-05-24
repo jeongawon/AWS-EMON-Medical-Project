@@ -7,13 +7,15 @@ Description: >
 Metadata:
   Project:
     Name: say2-6team
-    Purpose: RAG service infrastructure (read-only ChromaDB via S3 download)
+    Purpose: RAG service infrastructure for clinical opinion generation
   Notes:
     - ChromaDB runs inside the RAG container as PersistentClient (file mode).
     - No separate ChromaDB server/sidecar needed.
     - Task downloads DB from S3 at startup (~372MB, ~30s).
     - DB updates are done offline (6-month cycle) and re-uploaded to S3.
     - ECSClusterArn parameter is PENDING until compute-stack provides it.
+    - RAG service performs query embedding generation, ChromaDB search, final Bedrock synthesis, and diagnostic report storage in Aurora.
+    - Central Orchestrator handles modal orchestration and forwards prepared input to RAG /generate endpoint.
 
 Parameters:
   ProjectName:

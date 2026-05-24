@@ -16,11 +16,11 @@ Metadata:
     - Aurora/DB Secret should be created by data-stack and later exported.
     - IAM policies use project-prefix wildcards during dev and should be tightened after data-stack exports exact ARNs.
     - Cognito is included as a baseline, but callback/logout URLs are placeholders until the frontend/CloudFront domain is finalized.
-    - RAG service is responsible for RAG search, pre/post processing, prompting, and Bedrock invocation for automated narrative generation.
-    - RAG service writes the generated narrative to Aurora PostgreSQL.
+    - Central Orchestrator is responsible for patient request handling, modal orchestration, modal result normalization, and forwarding the prepared input to the RAG service.
+    - RAG service is responsible for query embedding generation, ChromaDB/Vector DB search, final clinical opinion generation via Bedrock, and storing the generated diagnostic report in Aurora PostgreSQL.
     - Modal services (ECG, CXR, LAB) write their own inference results directly to Aurora PostgreSQL.
-    - Orchestrator handles patient request intake, modal orchestration via Cloud Map, and final coordination. When orchestrator is healthy, it calls modal services directly via Cloud Map DNS.
     - Router service is a stateless routing layer. When orchestrator is down, router handles direct modal calls from physicians and assembles context for RAG. Router does not perform judgment or DB write.
+    - Final Bedrock synthesis and diagnostic report DB write are handled by the RAG service.
     - Modal services (ECG, CXR, LAB) are internal-only and are not attached to the ALB. They are accessible only via Cloud Map DNS from orchestrator or router-svc.
 
 Parameters:
@@ -110,12 +110,12 @@ Resources:
   # Security Groups
   #
   # Responsibility split:
-  #   - Orchestrator calls modal services via Cloud Map and collects results.
-  #   - Orchestrator passes assembled context to RAG /generate.
-  #   - RAG service performs embedding, ChromaDB search, prompting,
-  #     and Bedrock invocation for automated narrative generation.
-  #   - Modal services (ECG, CXR, LAB) write their own inference results
-  #     directly to Aurora PostgreSQL.
+  #   - Central Orchestrator: Patient request handling, modal orchestration via Cloud Map,
+  #     modal result collection and normalization, forwarding prepared input to RAG service.
+  #   - RAG service: Query embedding generation, ChromaDB/Vector DB search,
+  #     final clinical opinion generation via Bedrock, and diagnostic report storage in Aurora.
+  #   - Modal services (ECG, CXR, LAB): Write their own inference results directly to Aurora PostgreSQL.
+  #   - Final Bedrock synthesis and diagnostic report DB write are handled by the RAG service.
   #
   # ChromaDB:
   #   - ChromaDB/Vector DB is embedded inside the RAG container (file mode).
