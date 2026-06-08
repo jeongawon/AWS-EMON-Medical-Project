@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>중앙 오케스트레이터 설계 요약</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2330;
+    --border: #30363d;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #f78166;
+    --accent4: #d2a8ff;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --lab: #ffa657;
+    --ecg: #58a6ff;
+    --cxr: #3fb950;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans KR', sans-serif;
+    font-size: 14px;
+    line-height: 1.7;
+    min-height: 100vh;
+  }
+
+  /* HEADER */
+  .header {
+    background: linear-gradient(135deg, #0d1117 0%, #1a1f2e 50%, #0d1117 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 48px 0 36px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -60px; left: 50%;
+    transform: translateX(-50%);
+    width: 600px; height: 200px;
+    background: radial-gradient(ellipse, rgba(88,166,255,0.08) 0%, transparent 70%);
+  }
+  .header-badge {
+    display: inline-block;
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.3);
+    color: var(--accent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+    letter-spacing: 0.08em;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 8px;
+  }
+  .header-sub {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .header-meta {
+    margin-top: 20px;
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .header-meta span { color: var(--text); }
+
+  /* LAYOUT */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* SECTION TITLE */
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 20px;
+    margin-top: 48px;
+  }
+  .section-label:first-child { margin-top: 0; }
+  .section-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(88,166,255,0.1);
+    border: 1px solid rgba(88,166,255,0.25);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .section-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+
+  /* CARD */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* STATS ROW */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  @media (max-width: 700px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+  /* PIPELINE FLOW */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .pipe-step {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    position: relative;
+  }
+  .pipe-step:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: 19px;
+    top: 40px;
+    bottom: -20px;
+    width: 2px;
+    background: var(--border);
+  }
+  .pipe-icon {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    border: 2px solid var(--border);
+    background: var(--surface2);
+    position: relative;
+    z-index: 1;
+  }
+  .pipe-body {
+    flex: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 20px;
+  }
+  .pipe-body h4 {
+    font-weight: 700;
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+  .pipe-body p { color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .pipe-tag {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-right: 5px;
+    margin-top: 6px;
+  }
+  .tag-spark { background: rgba(210,168,255,0.12); color: var(--accent4); border: 1px solid rgba(210,168,255,0.2); }
+  .tag-gcs   { background: rgba(88,166,255,0.1);  color: var(--accent);  border: 1px solid rgba(88,166,255,0.2); }
+  .tag-lgbm  { background: rgba(63,185,80,0.1);   color: var(--accent2); border: 1px solid rgba(63,185,80,0.2); }
+  .tag-time  { background: rgba(247,129,102,0.1); color: var(--accent3); border: 1px solid rgba(247,129,102,0.2); }
+
+  /* MODALITY CARDS */
+  .modality-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  @media (max-width: 700px) { .modality-grid { grid-template-columns: 1fr; } }
+  .mod-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .mod-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .mod-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .mod-name { font-weight: 700; font-size: 14px; }
+  .mod-tat {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .mod-features { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .mod-features strong { color: var(--text); }
+
+  /* MODEL TABLE */
+  .model-compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 700px) { .model-compare { grid-template-columns: 1fr; } }
+  .model-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .model-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .model-badge {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .badge-initial { background: rgba(255,166,87,0.12); color: var(--lab); border: 1px solid rgba(255,166,87,0.25); }
+  .badge-followup { background: rgba(63,185,80,0.12); color: var(--accent2); border: 1px solid rgba(63,185,80,0.25); }
+  .model-card h4 { font-weight: 700; font-size: 14px; }
+  .model-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    font-size: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+    gap: 12px;
+  }
+  .model-row:last-child { border-bottom: none; }
+  .model-row .key { color: var(--muted); flex-shrink: 0; }
+  .model-row .val { color: var(--text); text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+  /* DECISION FLOW */
+  .decision-flow {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 2;
+    color: var(--muted);
+  }
+  .df-step { display: flex; align-items: flex-start; gap: 12px; }
+  .df-num {
+    background: var(--accent);
+    color: #000;
+    font-weight: 700;
+    font-size: 10px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 3px;
+  }
+  .df-text { color: var(--text); line-height: 1.6; margin-bottom: 10px; }
+  .df-text em { color: var(--muted); font-style: normal; font-size: 11px; }
+  .df-arrow {
+    color: var(--border);
+    padding-left: 30px;
+    margin: 2px 0;
+    font-size: 13px;
+  }
+
+  /* OUTPUT EXAMPLE */
+  .output-box {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+  .json-key { color: #79c0ff; }
+  .json-str { color: #a5d6ff; }
+  .json-num { color: #ffa657; }
+  .json-bool-t { color: #3fb950; }
+  .json-bool-f { color: #f78166; }
+  .json-null { color: #7d8590; }
+
+  /* PERF BAR */
+  .perf-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+  }
+  .perf-row:last-child { border-bottom: none; }
+  .perf-label { font-size: 12px; width: 120px; flex-shrink: 0; }
+  .perf-bar-wrap { flex: 1; background: var(--surface); border-radius: 4px; height: 8px; overflow: hidden; }
+  .perf-bar { height: 100%; border-radius: 4px; transition: width 1s ease; }
+  .perf-val { font-family: 'JetBrains Mono', monospace; font-size: 12px; width: 50px; text-align: right; flex-shrink: 0; }
+  .perf-note { font-size: 11px; color: var(--accent3); }
+
+  /* NOTICE */
+  .notice {
+    background: rgba(247,129,102,0.06);
+    border: 1px solid rgba(247,129,102,0.2);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: #c9a5a0;
+    margin-top: 12px;
+  }
+  .notice strong { color: var(--accent3); }
+
+  /* RULE TABLE */
+  .rule-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .rule-table th {
+    background: var(--surface2);
+    color: var(--muted);
+    text-align: left;
+    padding: 8px 12px;
+    font-weight: 500;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .rule-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(48,54,61,0.4);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  .rule-table tr:last-child td { border-bottom: none; }
+  .rule-table tr:hover td { background: rgba(255,255,255,0.02); }
+  .rule-num { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+  /* DIVIDER */
+  hr { border: none; border-top: 1px solid var(--border); margin: 32px 0; }
+
+  /* FOOTER */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 20px 24px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  /* ANIMATIONS */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .container > * { animation: fadeIn 0.4s ease both; }
+  .container > *:nth-child(1) { animation-delay: 0.05s; }
+  .container > *:nth-child(2) { animation-delay: 0.1s; }
+  .container > *:nth-child(3) { animation-delay: 0.15s; }
+  .container > *:nth-child(4) { animation-delay: 0.2s; }
+  .container > *:nth-child(5) { animation-delay: 0.25s; }
+  .container > *:nth-child(6) { animation-delay: 0.3s; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-badge">Emergency Department Multimodal Orchestration</div>
+  <h1>중앙 오케스트레이터 설계 요약</h1>
+  <div class="header-sub">다른 부서 참고용 · 핵심 흐름 중심 정리</div>
+  <div class="header-meta">
+    <div>데이터 출처: <span>MIMIC-IV / MIMIC-CXR</span></div>
+    <div>처리 환경: <span>GCS + Dataproc (PySpark 3.x)</span></div>
+    <div>작성일: <span>2026-05-27</span></div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ① 한눈에 보는 규모 -->
+  <div class="section-label">
+    <span class="section-num">Overview</span>
+    <h2 class="section-title">데이터 규모 한눈에 보기</h2>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <span class="stat-num">~31 GB</span>
+      <div class="stat-label">원본 데이터 크기<br>(압축 기준)</div>
+    </div>
+    <div class="stat-card">
+      <span class="stat-num">50,559</span>
+      <div class="stat-label">응급실 방문 건수<br>(encounter_master)</div>
+    </div>
+    <div class="stat-card">
+      <span class="stat-num">16.7M</span>
+      <div class="stat-label">검사 이벤트 수<br>(modality_events)</div>
+    </div>
+    <div class="stat-card">
+      <span class="stat-num">333K+</span>
+      <div class="stat-label">최종 학습 샘플<br>(train+val+test)</div>
+    </div>
+  </div>
+
+  <!-- ② 전체 파이프라인 흐름 -->
+  <div class="section-label">
+    <span class="section-num">01</span>
+    <h2 class="section-title">전체 파이프라인 흐름</h2>
+  </div>
+
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-icon">🗄️</div>
+      <div class="pipe-body">
+        <h4>① 원본 데이터 수집 (GCS)</h4>
+        <p>MIMIC-IV (환자 기본정보·입원·혈액검사·진단코드·활력징후·ECG) + MIMIC-CXR (흉부 X-ray 판독 결과)를 GCS 버킷 <code>gs://orch-333/</code>에 저장.</p>
+        <span class="pipe-tag tag-gcs">GCS</span>
+        <span class="pipe-tag tag-time">약 31 GB</span>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">⚙️</div>
+      <div class="pipe-body">
+        <h4>② 전처리 — 5개 Data Mart 빌드 <code>(build_datamarts.py)</code></h4>
+        <p>PySpark on Dataproc에서 순차적으로 5개 테이블을 생성. 소요 약 2~4시간.</p>
+        <div style="margin-top:8px; display:flex; flex-direction:column; gap:4px;">
+          <div style="font-size:11px; color:var(--muted);">① <b style="color:var(--text)">encounter_master</b> — 방문 1건당 1행 (환자 정보+트리아지+주진단)</div>
+          <div style="font-size:11px; color:var(--muted);">② <b style="color:var(--text)">modality_events</b> — ECG·CXR·LAB 검사 이벤트 + 각 feature 49개 (이진화)</div>
+          <div style="font-size:11px; color:var(--muted);">③ <b style="color:var(--text)">state_snapshots</b> — 결과 확인 가능 시점마다 환자 상태 스냅샷 (3-State 인코딩)</div>
+          <div style="font-size:11px; color:var(--muted);">④ <b style="color:var(--text)">actions_labels</b> — 스냅샷 시점 이후 1시간 내 실제 검사 오더를 레이블로 기록</div>
+          <div style="font-size:11px; color:var(--muted);">⑤ <b style="color:var(--text)">cc_prior_features</b> — 주호소별 검사 추천 확률 (train set에서만 집계)</div>
+        </div>
+        <span class="pipe-tag tag-spark">PySpark</span>
+        <span class="pipe-tag tag-gcs">Parquet 저장</span>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🔀</div>
+      <div class="pipe-body">
+        <h4>③ 데이터셋 조립 & 분할</h4>
+        <p>5개 Data Mart를 조인 → 최종 feature 81개, 레이블 5개. <b>subject_id 기준</b> 70/15/15 분할로 동일 환자 데이터 유출 방지.</p>
+        <span class="pipe-tag tag-time">Train 232K / Val 50K / Test 50K</span>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🧠</div>
+      <div class="pipe-body">
+        <h4>④ 모델 학습 — LightGBM 이진 분류기</h4>
+        <p><b>Initial 모델</b> 3개 + <b>Follow-up 모델</b> 5개 = 총 8개의 독립 LightGBM 이진 분류 모델. 학습 패러다임: <b>Imitation Learning</b> (실제 의료진 오더 패턴을 정답으로 모방).</p>
+        <span class="pipe-tag tag-lgbm">LightGBM</span>
+        <span class="pipe-tag tag-time">~수십 분</span>
+      </div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon">🚀</div>
+      <div class="pipe-body">
+        <h4>⑤ 실시간 추론 — HybridDecisionEngine</h4>
+        <p>환자 입실 → Initial 모델(첫 검사 결정) → 결과 수신 → Follow-up 모델(다음 검사/종료/에스컬레이션) → 최대 3회 반복 후 소견서 생성.</p>
+        <span class="pipe-tag tag-lgbm">Argmax 전략</span>
+        <span class="pipe-tag tag-time">최대 3회 반복</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ③ 전처리 상세 - 모달리티 -->
+  <div class="section-label">
+    <span class="section-num">02</span>
+    <h2 class="section-title">3개 모달리티 전처리 방식</h2>
+  </div>
+
+  <div class="card" style="margin-bottom:12px;">
+    <div class="card-title">TAT(결과 대기시간) — 스냅샷 타이밍의 기준</div>
+    <p style="font-size:12px; color:var(--muted); margin-bottom:12px;">각 검사의 <b style="color:var(--text)">result_available_time = 검사 시각 + TAT</b>. 이 시점마다 상태 스냅샷을 기록.</p>
+    <div class="modality-grid">
+      <div class="mod-card">
+        <div class="mod-header">
+          <div class="mod-dot" style="background:var(--ecg)"></div>
+          <span class="mod-name">ECG</span>
+          <span class="mod-tat">TAT: 10분</span>
+        </div>
+        <div class="mod-features">
+          <strong>24개 이진 feature</strong><br>
+          ICD-10 코드 기반 — 심혈관 14개 (급성 심근경색·심방세동·심부전 등) + 비심혈관 10개 (당뇨·신부전·패혈증 등)<br><br>
+          <span style="color:var(--muted); font-size:11px;">※ TAT 10분: AHA/ACC 가이드라인 기준 (MIMIC 데이터에 판독 완료 시각 없음)</span>
+        </div>
+      </div>
+      <div class="mod-card">
+        <div class="mod-header">
+          <div class="mod-dot" style="background:var(--cxr)"></div>
+          <span class="mod-name">CXR</span>
+          <span class="mod-tat">TAT: 30분</span>
+        </div>
+        <div class="mod-features">
+          <strong>14개 이진 feature</strong><br>
+          CheXpert AI 판독 기반 — 무기폐·심비대·폐렴·기흉·흉수 등<br>불확실 소견(-1.0)은 <b>U-Zeros 전략</b>으로 0 처리 (False Positive 억제)<br><br>
+          <span style="color:var(--muted); font-size:11px;">※ TAT 30분: 응급 방사선 실측 범위(20~48분) 내 보수적 중간값</span>
+        </div>
+      </div>
+      <div class="mod-card">
+        <div class="mod-header">
+          <div class="mod-dot" style="background:var(--lab)"></div>
+          <span class="mod-name">LAB</span>
+          <span class="mod-tat">TAT: 70분 (실증)</span>
+        </div>
+        <div class="mod-features">
+          <strong>10개 이진 feature</strong><br>
+          abnormal flag 기반 — Troponin T·Lactate·Creatinine·Hemoglobin·WBC 등<br><br>
+          <span style="color:var(--muted); font-size:11px;">※ TAT 70분: labevents storetime - charttime 실측 중앙값(p50)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">3-State 인코딩 — 스냅샷 시점 검사 상태</div>
+    <div style="display:flex; gap:16px; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+        <span style="font-family:'JetBrains Mono',monospace; background:var(--surface2); border:1px solid var(--border); padding:2px 8px; border-radius:4px; color:var(--muted);">0</span>
+        <span><b style="color:var(--text)">NOT_ORDERED</b> — 아직 검사 오더 없음</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+        <span style="font-family:'JetBrains Mono',monospace; background:rgba(255,166,87,0.1); border:1px solid rgba(255,166,87,0.2); padding:2px 8px; border-radius:4px; color:var(--lab);">1</span>
+        <span><b style="color:var(--text)">PENDING</b> — 시행했으나 결과 대기 중</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+        <span style="font-family:'JetBrains Mono',monospace; background:rgba(63,185,80,0.1); border:1px solid rgba(63,185,80,0.2); padding:2px 8px; border-radius:4px; color:var(--accent2);">2</span>
+        <span><b style="color:var(--text)">AVAILABLE</b> — 결과 확인 가능</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ④ LLM 에스컬레이션 규칙 -->
+  <div class="section-label">
+    <span class="section-num">03</span>
+    <h2 class="section-title">LLM 에스컬레이션 트리거 규칙</h2>
+  </div>
+  <div class="card">
+    <div class="card-title">need_reasoning = 1이 되는 조건 (규칙 기반, 학습 레이블로도 사용)</div>
+    <table class="rule-table">
+      <thead>
+        <tr>
+          <th>규칙</th>
+          <th>조건</th>
+          <th>임상 근거</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="rule-num">Rule 1</td>
+          <td>급성 심근경색·심정지·폐색전증·Troponin 이상·기흉 중 하나라도 양성</td>
+          <td>즉각적 전문의 판단 필요 고위험 단일 소견</td>
+        </tr>
+        <tr>
+          <td class="rule-num">Rule 2</td>
+          <td>심방세동(ECG) 있으나 Troponin(LAB) 정상 — ECG+LAB 모두 완료 시</td>
+          <td>검사 결과 충돌 → 추가 판단 필요</td>
+        </tr>
+        <tr>
+          <td class="rule-num">Rule 3</td>
+          <td>중증도(acuity ≤ 2) + 모든 검사 완료 + 모든 결과 정상</td>
+          <td>중증 환자인데 이상 없음 → 놓친 진단 가능성</td>
+        </tr>
+        <tr>
+          <td class="rule-num">Rule 4</td>
+          <td>체류 시간 > 4시간</td>
+          <td>복잡한 케이스, 장기 대기</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ⑤ 모델 구조 -->
+  <div class="section-label">
+    <span class="section-num">04</span>
+    <h2 class="section-title">모델 구조 — Initial vs Follow-up</h2>
+  </div>
+
+  <div class="model-compare">
+    <div class="model-card">
+      <div class="model-header">
+        <span class="model-badge badge-initial">Initial</span>
+        <h4>첫 검사 결정 모델</h4>
+      </div>
+      <div class="model-row"><span class="key">모델 수</span><span class="val">LightGBM × 3</span></div>
+      <div class="model-row"><span class="key">출력 레이블</span><span class="val">order_ecg / order_cxr / order_lab</span></div>
+      <div class="model-row"><span class="key">결정 방식</span><span class="val">3개 이진 확률의 argmax</span></div>
+      <div class="model-row"><span class="key">사용 데이터</span><span class="val">첫 번째 스냅샷만 (action_index=1)</span></div>
+      <div class="model-row"><span class="key">주요 feature</span><span class="val">나이·성별·주호소·활력징후·CC Prior</span></div>
+      <div class="model-row"><span class="key">Overall 정확도</span><span class="val" style="color:var(--accent2)">91.33%</span></div>
+      <div class="notice"><strong>주의:</strong> CXR 클래스가 2.5%로 심각한 불균형 → CXR 예측 정확도 0%. 향후 개선 필요.</div>
+    </div>
+    <div class="model-card">
+      <div class="model-header">
+        <span class="model-badge badge-followup">Follow-up</span>
+        <h4>추가 검사/종료 결정 모델</h4>
+      </div>
+      <div class="model-row"><span class="key">모델 수</span><span class="val">LightGBM × 5</span></div>
+      <div class="model-row"><span class="key">출력 레이블</span><span class="val">order_ecg / order_cxr / order_lab / stop / need_reasoning</span></div>
+      <div class="model-row"><span class="key">결정 방식</span><span class="val">5개 이진 확률의 argmax</span></div>
+      <div class="model-row"><span class="key">사용 데이터</span><span class="val">모든 스냅샷 (action_index ≥ 1)</span></div>
+      <div class="model-row"><span class="key">추가 feature</span><span class="val">has_ecg/cxr/lab (3-State) + ECG·CXR·LAB 결과 49개</span></div>
+      <div class="model-row"><span class="key">에스컬레이션 기준</span><span class="val">신뢰도 &lt; 0.6 또는 need_reasoning=1</span></div>
+    </div>
+  </div>
+
+  <!-- ⑥ 추론 흐름 -->
+  <div class="section-label">
+    <span class="section-num">05</span>
+    <h2 class="section-title">실시간 추론 흐름 (HybridDecisionEngine)</h2>
+  </div>
+
+  <div class="card">
+    <div style="display:flex; flex-direction:column; gap:0;">
+      <div class="df-step">
+        <div class="df-num">1</div>
+        <div class="df-text">환자 응급실 입실 → <b>Initial 모델</b> 실행<br><em>입력: 주호소·나이·바이탈·CC Prior</em></div>
+      </div>
+      <div class="df-arrow">↓ 첫 검사 오더 (ECG / CXR / LAB 중 argmax)</div>
+      <div class="df-step">
+        <div class="df-num">2</div>
+        <div class="df-text">검사 시행 → 결과 대기 (PENDING) → 결과 수신 (AVAILABLE)</div>
+      </div>
+      <div class="df-arrow">↓</div>
+      <div class="df-step">
+        <div class="df-num">3</div>
+        <div class="df-text"><b>Follow-up 모델</b> 실행 (최대 3회 반복)<br><em>입력: 기존 상태 + 검사 결과 feature 49개</em><br><em>출력: 다음 오더 / stop / need_reasoning 중 argmax</em></div>
+      </div>
+      <div class="df-arrow">↓ 분기</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:4px;">
+        <div style="background:rgba(63,185,80,0.06); border:1px solid rgba(63,185,80,0.2); border-radius:8px; padding:12px; font-size:12px;">
+          <b style="color:var(--accent2)">stop = 1</b><br>
+          <span style="color:var(--muted)">검사 종료 → 소견서 자동 생성</span>
+        </div>
+        <div style="background:rgba(247,129,102,0.06); border:1px solid rgba(247,129,102,0.2); border-radius:8px; padding:12px; font-size:12px;">
+          <b style="color:var(--accent3)">need_reasoning = 1 또는 신뢰도 &lt; 0.6</b><br>
+          <span style="color:var(--muted)">Bedrock LLM 에스컬레이션 (전문의 판단 요청)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ⑦ 출력 예시 -->
+  <div class="section-label">
+    <span class="section-num">06</span>
+    <h2 class="section-title">오케스트레이터 출력 예시</h2>
+  </div>
+
+  <div class="output-box">
+    {<br>
+    &nbsp;&nbsp;<span class="json-key">"recommendation"</span>: {<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="json-key">"next_modals"</span>: [<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="json-key">"modal"</span>: <span class="json-str">"LAB"</span>, <span class="json-key">"confidence"</span>: <span class="json-num">0.81</span> }<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;],<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="json-key">"reasoning"</span>: <span class="json-str">"ECG 완료 + 빈맥(HR 102) → LAB 권장 (81%)"</span><br>
+    &nbsp;&nbsp;},<br>
+    &nbsp;&nbsp;<span class="json-key">"escalate"</span>: <span class="json-bool-f">false</span>,<br>
+    &nbsp;&nbsp;<span class="json-key">"escalate_reason"</span>: <span class="json-null">null</span><br>
+    }
+  </div>
+
+  <!-- ⑧ Initial 성능 요약 -->
+  <div class="section-label">
+    <span class="section-num">07</span>
+    <h2 class="section-title">Initial 모델 성능 요약</h2>
+  </div>
+  <div class="card">
+    <div class="card-title">기존 CC Map 대비 개선 — Test set (50,559 samples)</div>
+    <div class="perf-row">
+      <span class="perf-label">CC Map (기존)</span>
+      <div class="perf-bar-wrap"><div class="perf-bar" style="width:48.1%; background:var(--muted);"></div></div>
+      <span class="perf-val" style="color:var(--muted)">48.1%</span>
+    </div>
+    <div class="perf-row">
+      <span class="perf-label">Initial ML</span>
+      <div class="perf-bar-wrap"><div class="perf-bar" style="width:91.33%; background:linear-gradient(90deg, var(--accent), var(--accent2));"></div></div>
+      <span class="perf-val" style="color:var(--accent2)">91.33%</span>
+    </div>
+    <div style="margin-top:12px; font-size:12px; color:var(--muted);">
+      ECG <b style="color:var(--text)">92.2%</b> &nbsp;·&nbsp; LAB <b style="color:var(--text)">94.4%</b> &nbsp;·&nbsp; CXR <b style="color:var(--accent3)">0.0%</b> (클래스 불균형 문제, 향후 개선 예정)
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<div class="footer">
+  Emergency Department Multimodal Orchestration &nbsp;·&nbsp; 내부 참고용 요약본 &nbsp;·&nbsp; 원본: 중앙_오케스트레이터_로직_설계_보고서.md
+</div>
+
+</body>
+</html>

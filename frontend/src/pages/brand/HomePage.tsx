@@ -5,18 +5,107 @@ import {
 } from "lucide-react";
 import { BrandShell } from "../../components/brand/BrandShell";
 import { SystemFlowShowcase } from "../../components/brand/SystemFlowShowcase";
+import { ProblemAndMarket } from "../../components/brand/ProblemAndMarket";
 import { Reveal } from "../../components/brand/anim/Reveal";
+import { CountUp } from "../../components/brand/anim/CountUp";
 
 export default function HomePage() {
   return (
     <BrandShell transparent>
       <Hero />
+      <EmonAcronym />
       <Stats />
       <SystemFlowShowcase />
-      <ProductPreview />
-      <TechStack />
+      <ProblemAndMarket />
       <FinalCTA />
     </BrandShell>
+  );
+}
+
+// ─────────────────────────────────────────────────────
+// EMON 약자 소개 — Emergency Multimodal Orchestrated Network
+// VUNO 스타일의 클린한 4-letter 그리드
+// ─────────────────────────────────────────────────────
+function EmonAcronym() {
+  const letters = [
+    {
+      letter: "E",
+      word: "Emergency",
+      korean: "응급의료",
+      desc: "응급실 현장의 1초가 아쉬운 의사결정을 실시간으로 지원합니다.",
+    },
+    {
+      letter: "M",
+      word: "Multimodal",
+      korean: "멀티모달",
+      desc: "ECG · CXR · LAB 세 가지 검사를 동시에 분석합니다.",
+    },
+    {
+      letter: "O",
+      word: "Orchestrated",
+      korean: "오케스트레이션",
+      desc: "흩어진 응급 데이터를 중앙에서 정교하게 조율합니다.",
+    },
+    {
+      letter: "N",
+      word: "Network",
+      korean: "지능 네트워크",
+      desc: "Bedrock LLM · RAG · FHIR이 의사의 판단을 보조합니다.",
+    },
+  ];
+  return (
+    <section className="py-28 md:py-32 bg-vuno-bg border-t border-vuno-divider">
+      <div className="max-w-[1400px] mx-auto px-6">
+        <Reveal className="text-center mb-20">
+          <div className="inline-flex items-center gap-2 px-4 py-2 border border-vuno-cyan/40 text-vuno-cyan text-sm md:text-base font-bold uppercase tracking-[0.25em] mb-6">
+            <Sparkles className="h-4 w-4" />
+            About EMON
+          </div>
+          <h2 className="text-4xl md:text-6xl font-bold text-white leading-tight">
+            EMON이란?
+          </h2>
+          <p className="mt-7 text-2xl md:text-3xl text-vuno-muted leading-relaxed whitespace-nowrap overflow-x-auto pb-2">
+            <span className="text-vuno-cyan font-bold">E</span>mergency{" "}
+            <span className="text-vuno-cyan font-bold">M</span>ultimodal{" "}
+            <span className="text-vuno-cyan font-bold">O</span>rchestrated{" "}
+            <span className="text-vuno-cyan font-bold">N</span>etwork — 응급 멀티모달 오케스트레이션 네트워크.
+          </p>
+        </Reveal>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
+          {letters.map((l, i) => (
+            <Reveal key={l.letter} delay={i * 120}>
+              <div className="relative h-full border border-vuno-border bg-vuno-surface/40 hover:bg-vuno-surface hover:border-vuno-cyan/60 transition-all p-8 group overflow-hidden">
+                {/* 거대한 글자 */}
+                <div className="relative">
+                  <div className="text-[140px] md:text-[180px] font-bold text-vuno-cyan leading-none tracking-tighter group-hover:scale-105 origin-top-left transition-transform duration-500">
+                    {l.letter}
+                  </div>
+                  {/* 글자 뒤로 옅게 깔리는 같은 글자 (배경 장식) */}
+                  <div
+                    className="absolute -top-4 -right-2 text-[200px] md:text-[260px] font-bold text-vuno-cyan/[0.04] leading-none pointer-events-none select-none"
+                    aria-hidden
+                  >
+                    {l.letter}
+                  </div>
+                </div>
+                <div className="mt-2 text-2xl md:text-3xl font-bold text-white">
+                  {l.word}
+                </div>
+                <div className="mt-1 text-base md:text-lg text-vuno-cyan/80">
+                  {l.korean}
+                </div>
+                <p className="mt-5 text-base md:text-lg text-vuno-muted leading-relaxed">
+                  {l.desc}
+                </p>
+                {/* 호버 시 하단 라인 */}
+                <div className="absolute left-0 bottom-0 h-0.5 w-0 bg-vuno-cyan group-hover:w-full transition-all duration-500" />
+              </div>
+            </Reveal>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -90,17 +179,11 @@ function Hero() {
             </div>
           </Reveal>
 
-          <Reveal delay={1700} className="mt-8 max-w-2xl">
-            <p className="text-base text-slate-200 leading-relaxed drop-shadow">
+          <Reveal delay={1700} className="mt-10 max-w-4xl">
+            <p className="text-xl md:text-2xl text-slate-200 leading-relaxed drop-shadow break-keep">
               ECG·CXR·LAB 데이터의 동시 분석을 넘어 6시간 뒤의 예후 예측까지.
               EMON은 흩어져 있던 응급 데이터를 중앙에서 정교하게 조율하고,
-              49,743건의 대규모 임상 사례를 실시간 대조하여 의사가 즉시 신뢰할
-              수 있는,
-            </p>
-            <p
-              className="text-base text-slate-200 leading-relaxed drop-shadow mt-2"
-              style={{ whiteSpace: "nowrap" }}
-            >
+              49,743건의 대규모 임상 사례를 실시간 대조하여 의사가 즉시 신뢰할 수 있는
               완성형 소견서를 제안합니다.
             </p>
           </Reveal>
@@ -160,19 +243,32 @@ function Cert({ label }: { label: string }) {
 // Stats
 // ─────────────────────────────────────────────────────
 function Stats() {
-  const stats = [
-    { value: "92%",     label: "AI Accuracy" },
-    { value: "28s",     label: "Avg. Analysis Time" },
-    { value: "49,743",  label: "MIMIC-IV Cases" },
-    { value: "3+1",     label: "Modals + RAG" },
+  type Stat =
+    | { kind: "count"; end: number; suffix?: string; comma?: boolean; duration?: number; label: string }
+    | { kind: "static"; value: string; label: string };
+  const stats: Stat[] = [
+    { kind: "count",  end: 92,    suffix: "%", duration: 1600, label: "AI Accuracy" },
+    { kind: "count",  end: 28,    suffix: "s", duration: 1400, label: "Avg. Analysis Time" },
+    { kind: "count",  end: 49743, comma: true, duration: 2200, label: "MIMIC-IV Cases" },
+    { kind: "static", value: "3+1", label: "Modals + RAG" },
   ];
   return (
     <section className="border-y border-vuno-divider bg-vuno-bg">
       <div className="max-w-[1400px] mx-auto px-6 py-20 grid grid-cols-2 md:grid-cols-4 gap-8">
         {stats.map((s, i) => (
           <Reveal key={s.label} delay={i * 100} className="text-center">
-            <div className="text-4xl md:text-6xl font-bold text-vuno-cyan font-numeric tracking-tight">
-              {s.value}
+            <div className="text-4xl md:text-6xl font-bold text-vuno-cyan font-numeric tracking-tight tabular-nums">
+              {s.kind === "count" ? (
+                <CountUp
+                  end={s.end}
+                  suffix={s.suffix}
+                  comma={s.comma}
+                  duration={s.duration}
+                  delay={i * 120}
+                />
+              ) : (
+                s.value
+              )}
             </div>
             <div className="text-xs text-vuno-muted mt-2 tracking-[0.15em] uppercase">{s.label}</div>
           </Reveal>

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { BrainCircuit, Stethoscope, FileCheck2, Sparkles, Clock, ArrowRight, ArrowUpRight } from "lucide-react";
+import { BrainCircuit, Stethoscope, Sparkles, ArrowRight, ArrowUpRight } from "lucide-react";
 import { Reveal } from "./anim/Reveal";
 
 /**
@@ -24,21 +24,17 @@ export function SystemFlowShowcase() {
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[600px] bg-vuno-cyan/5 rounded-full blur-3xl pointer-events-none" />
 
       <div className="relative max-w-[1600px] mx-auto px-6">
-        {/* 헤더 */}
-        <Reveal className="grid grid-cols-1 lg:grid-cols-[420px_1fr] gap-12 mb-16">
-          <div>
-            <div className="text-xs font-bold text-vuno-cyan tracking-[0.25em] uppercase mb-4">
-              Products · System Flow
-            </div>
-            <h2 className="text-5xl md:text-6xl font-bold text-white leading-[1.1] tracking-tight">
+        {/* 헤더 — Products + 부제 같은 baseline 한 줄 배치 */}
+        <Reveal className="mb-16">
+          <div className="text-base md:text-lg font-bold text-vuno-cyan tracking-[0.25em] uppercase mb-6">
+            Products · System Flow
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-10 gap-y-4">
+            <h2 className="text-6xl md:text-7xl font-bold text-white leading-[1.1] tracking-tight flex-shrink-0">
               Products
             </h2>
-          </div>
-          <div className="flex items-end">
-            <p className="text-lg md:text-xl text-vuno-muted leading-relaxed max-w-2xl">
-              간호사 트리아지부터 의사 서명까지, AI가 ECG·CXR·LAB을 동시 분석하고
-              유사 사례를 검색해 1차 소견서를 자동 생성합니다.
-              <span className="text-white font-semibold"> 진단 의사결정 시간 40% 단축.</span>
+            <p className="text-xl md:text-2xl text-vuno-muted leading-relaxed whitespace-nowrap">
+              환자 정보 입력부터 의사 서명까지, AI가 ECG·CXR·LAB을 동시 추론하고 RAG-svc가 Bedrock으로 유사 사례를 종합해 통합 소견서를 자동 생성합니다.
             </p>
           </div>
         </Reveal>
@@ -66,19 +62,19 @@ export function SystemFlowShowcase() {
    ───────────────────────────────────────────────────────── */
 function StageHeader({ num, label, sub, highlight }: { num: string; label: string; sub: string; highlight?: boolean }) {
   return (
-    <div className="text-center mb-5">
+    <div className="text-center mb-6">
       <div className={
-        "inline-flex items-center gap-2 px-3 py-1 border " +
+        "inline-flex items-center gap-2 px-4 py-2 border " +
         (highlight ? "border-vuno-cyan bg-vuno-cyan/10" : "border-vuno-border bg-vuno-surface")
       }>
-        <span className={"text-xs font-bold font-numeric tracking-[0.2em] " + (highlight ? "text-vuno-cyan" : "text-vuno-muted")}>
+        <span className={"text-sm md:text-base font-bold font-numeric tracking-[0.2em] " + (highlight ? "text-vuno-cyan" : "text-vuno-muted")}>
           STAGE {num}
         </span>
       </div>
-      <h3 className={"text-xl md:text-2xl font-bold mt-3 " + (highlight ? "text-vuno-cyan" : "text-white")}>
+      <h3 className={"text-2xl md:text-3xl font-bold mt-4 " + (highlight ? "text-vuno-cyan" : "text-white")}>
         {label}
       </h3>
-      <div className="text-xs text-vuno-muted mt-1 tracking-wider uppercase">{sub}</div>
+      <div className="text-sm md:text-base text-vuno-muted mt-2 tracking-wider uppercase">{sub}</div>
     </div>
   );
 }
@@ -94,8 +90,8 @@ function Stage01TriageForm() {
       <div className="flex-1 border border-vuno-border bg-vuno-surface/40 overflow-hidden flex flex-col">
         {/* EMR 액션 바 */}
         <div className="bg-vuno-bg border-b border-vuno-border px-3 py-2 flex items-center gap-2 z-10">
-          <Stethoscope className="h-3.5 w-3.5 text-emerald-400" />
-          <span className="text-[10px] font-bold text-emerald-400 tracking-[0.15em] uppercase">Triage Workstation</span>
+          <Stethoscope className="h-4 w-4 text-emerald-400" />
+          <span className="text-xs md:text-sm font-bold text-emerald-400 tracking-[0.15em] uppercase">Triage Workstation</span>
           <span className="ml-auto flex h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
         </div>
 
@@ -472,94 +468,23 @@ function Stage03Report() {
         {/* EMR 액션 바 */}
         <div className="bg-vuno-bg border-b border-vuno-border px-3 py-2 flex items-center gap-2 z-10">
           <Sparkles className="h-3.5 w-3.5 text-vuno-cyan" />
-          <span className="text-[10px] font-bold text-vuno-cyan tracking-[0.15em] uppercase">AI 종합 소견서</span>
+          <span className="text-xs md:text-sm font-bold text-vuno-cyan tracking-[0.15em] uppercase">AI 종합 소견서</span>
           <span className="ml-auto flex h-1.5 w-1.5 rounded-full bg-vuno-cyan animate-pulse" />
         </div>
 
-        {/* 소견서 작성 영역 — 다크 배경 위 흰 종이 */}
+        {/* 소견서 작성 영역 — 실제 이미지 (소견서 최종.png) */}
         <div className="relative flex-1 min-h-[420px] overflow-hidden p-3 grid place-items-center">
           {/* 배경 글로우 */}
           <div className="absolute inset-0 bg-vuno-cyan/5" />
 
-          {/* 흰색 소견서 카드 (종이) */}
-          <div
-            className="relative w-full bg-white shadow-[0_8px_30px_-4px_rgba(0,0,0,0.5)] opacity-0"
-            style={{ animation: "report-rise 0.6s cubic-bezier(0.16,1,0.3,1) 0.1s forwards" }}
-          >
-            {/* 제목 */}
-            <div className="text-center pt-3 pb-2 border-b-2 border-slate-800">
-              <div className="text-base font-bold text-slate-900 tracking-[0.4em]">소 견 서</div>
-              <div className="text-[8px] text-red-600 mt-0.5 tracking-wider">[ 원본대조필인 (印) ]</div>
-            </div>
-
-            {/* 표 — 환자 정보 */}
-            <table className="w-full text-[9px] border-collapse">
-              <tbody>
-                <ReportFormRow label="차트번호" value="19041043" delay="0.6s" />
-                <ReportFormRow label="환자 성명" value="원OO  ·  M  ·  만 30세" delay="1.0s" />
-                <ReportFormRow label="병      명" value="신규 발현 심방세동 (NEW A-fib)" delay="1.5s" highlight />
-                <ReportFormRow label="발 병 일" value="2026-04-29  (발병 90분)" delay="2.0s" />
-              </tbody>
-            </table>
-
-            {/* 향후 치료 의견 */}
-            <div className="px-2.5 py-2 border-t border-slate-300">
-              <div
-                className="text-[8px] font-bold text-slate-700 mb-1 opacity-0"
-                style={{ animation: "fade-in 0.3s ease-out 2.4s forwards" }}
-              >
-                [ 진단 요약 ]
-              </div>
-              <TypingLine
-                text="ECG 심방세동 61% · HR 114 빈맥 · 율동전환 평가 필요"
-                delay="2.6s"
-                className="text-[8.5px] text-slate-800"
-              />
-              <div
-                className="text-[8px] font-bold text-slate-700 mt-1.5 mb-1 opacity-0"
-                style={{ animation: "fade-in 0.3s ease-out 3.8s forwards" }}
-              >
-                [ 향후 치료 권고 ]
-              </div>
-              <TypingLine text="① 12유도 ECG 재시행 · 판독 확인" delay="4.0s" className="text-[8.5px] text-slate-800" />
-              <TypingLine text="② 항응고 평가 — CHA₂DS₂-VASc 산정" delay="4.9s" className="text-[8.5px] text-slate-800" />
-              <TypingLine text="③ 심박수 조절 — Metoprolol IV 고려" delay="5.8s" className="text-[8.5px] text-slate-800" />
-            </div>
-
-            {/* 비고 */}
-            <div
-              className="px-2.5 py-1.5 border-t border-slate-300 flex items-center gap-2 opacity-0"
-              style={{ animation: "fade-in 0.4s ease-out 6.6s forwards" }}
-            >
-              <span className="text-[8px] font-bold text-slate-700">비고</span>
-              <span className="text-[8px] text-slate-600">Risk: URGENT · AI 보조 분석 · RAG 사례 3건</span>
-            </div>
-
-            {/* 하단 — 발행일 + 의사 서명 + 도장 */}
-            <div className="px-2.5 py-2 border-t-2 border-slate-800 flex items-center justify-between">
-              <div
-                className="text-[8px] text-slate-600 opacity-0"
-                style={{ animation: "fade-in 0.3s ease-out 7.0s forwards" }}
-              >
-                발행일 2026-04-29
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  className="text-[8px] text-slate-700 opacity-0"
-                  style={{ animation: "fade-in 0.3s ease-out 7.0s forwards" }}
-                >
-                  의사성명 정OO
-                </span>
-                {/* 도장 — pop-in */}
-                <span
-                  className="inline-grid place-items-center h-5 w-5 rounded-full border-2 border-red-600 text-red-600 text-[7px] font-bold opacity-0"
-                  style={{ animation: "stamp-pop 0.5s cubic-bezier(0.34,1.56,0.64,1) 7.4s forwards" }}
-                >
-                  印
-                </span>
-              </div>
-            </div>
-          </div>
+          {/* 흰색 소견서 이미지 — fade-up 등장 */}
+          <img
+            src="/소견서최종.png"
+            alt="AI 자동 생성 종합 소견서 — 양정인 환자 NSTEMI 사례 (주증상·현병력·과거력·향후 치료 의견)"
+            className="relative w-full h-auto block shadow-[0_8px_30px_-4px_rgba(0,0,0,0.5)] opacity-0"
+            style={{ animation: "report-rise 0.7s cubic-bezier(0.16,1,0.3,1) 0.15s forwards" }}
+            loading="lazy"
+          />
         </div>
       </div>
 
@@ -567,11 +492,6 @@ function Stage03Report() {
         @keyframes report-rise {
           from { opacity: 0; transform: translateY(20px) scale(0.97); }
           to   { opacity: 1; transform: translateY(0) scale(1); }
-        }
-        @keyframes stamp-pop {
-          0%   { opacity: 0; transform: scale(2) rotate(-25deg); }
-          60%  { opacity: 1; transform: scale(0.9) rotate(8deg); }
-          100% { opacity: 1; transform: scale(1) rotate(-12deg); }
         }
       `}</style>
     </div>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 320" width="1400" height="320">
+  <style>
+    .logo-text {
+      font-family: "Pretendard Variable", "Pretendard", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-weight: 800;
+      font-size: 260px;
+      letter-spacing: -6px;
+    }
+    .emon { fill: #FFFFFF; }
+    .med  { fill: #5EEAD4; }
+    .reg  { fill: #5EEAD4; font-size: 84px; font-weight: 700; }
+  </style>
+  <text class="logo-text emon" x="40" y="240">EMON</text>
+  <text class="logo-text med"  x="700" y="240">Med</text>
+  <text class="reg"            x="1240" y="120">®</text>
+</svg>

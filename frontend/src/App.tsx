@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./lib/v2/auth";
 import V2RequireAuth from "./components/v2/RequireAuth";
+import ScrollToTop from "./components/ScrollToTop";
 
 // ──────────────────────────────────────────────────────────
 // 🌐 say-6 브랜드 사이트 (마케팅 + 사업소개)
@@ -11,8 +12,12 @@ import ProductEcgPage from "./pages/brand/ProductEcgPage";
 import ProductCxrPage from "./pages/brand/ProductCxrPage";
 import ProductLabPage from "./pages/brand/ProductLabPage";
 import TechnologyPage from "./pages/brand/TechnologyPage";
+import TechnologyRagPage from "./pages/brand/TechnologyRagPage";
+import RagPipelinePage from "./pages/brand/RagPipelinePage";
+import RoadmapPage from "./pages/brand/RoadmapPage";
 import TeamPage from "./pages/brand/TeamPage";
 import ContactPage from "./pages/brand/ContactPage";
+import QnAPage from "./pages/brand/QnAPage";
 
 // ──────────────────────────────────────────────────────────
 // 🩺 Live Demo (실제 시스템 — 로그인부터 소견서까지)
@@ -25,7 +30,6 @@ import V2ReportEditorPage from "./pages/v2/ReportEditorPage";
 import V2ReportViewerPage from "./pages/v2/ReportViewerPage";
 import V2TriagePage from "./pages/v2/TriagePage";
 import V2AdminDashboardPage from "./pages/v2/AdminDashboardPage";
-import V2ReportListPage from "./pages/v2/ReportListPage";
 
 // ──────────────────────────────────────────────────────────
 // 📦 Legacy EMR (기존 12페이지 — 점진적으로 v2로 마이그레이션 예정)
@@ -49,6 +53,7 @@ export default function App() {
   return (
     <AuthProvider>
     <BrowserRouter>
+      <ScrollToTop />
       <Routes>
         {/* ─────────────────────────────────────────────
             say-6 브랜드 사이트 (마케팅)
@@ -59,6 +64,10 @@ export default function App() {
         <Route path="/product/cxr"   element={<ProductCxrPage />} />
         <Route path="/product/lab"   element={<ProductLabPage />} />
         <Route path="/technology"    element={<TechnologyPage />} />
+        <Route path="/technology/rag" element={<TechnologyRagPage />} />
+        <Route path="/technology/rag/pipeline" element={<RagPipelinePage />} />
+        <Route path="/roadmap"       element={<RoadmapPage />} />
+        <Route path="/qna"           element={<QnAPage />} />
         <Route path="/team"          element={<TeamPage />} />
         <Route path="/contact"       element={<ContactPage />} />
 
@@ -78,9 +87,8 @@ export default function App() {
         <Route path="/demo/dashboard" element={
           <V2RequireAuth><V2AdminDashboardPage /></V2RequireAuth>
         } />
-        <Route path="/demo/reports" element={
-          <V2RequireAuth><V2ReportListPage /></V2RequireAuth>
-        } />
+        {/* 종합소견서 목록 페이지 제거 — 기존 링크는 환자정보입력으로 리다이렉트 */}
+        <Route path="/demo/reports" element={<Navigate to="/demo/triage" replace />} />
         <Route path="/demo/patient/:id" element={
           <V2RequireAuth><V2PatientDetailPage /></V2RequireAuth>
         } />

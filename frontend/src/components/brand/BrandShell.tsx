@@ -12,6 +12,8 @@ interface BrandShellProps {
 const NAV_ITEMS = [
   { to: "/product",    label: "Product" },
   { to: "/technology", label: "Technology" },
+  { to: "/roadmap",    label: "Roadmap" },
+  { to: "/qna",        label: "Q&A" },
   { to: "/team",       label: "Team" },
   { to: "/contact",    label: "Contact" },
 ];
