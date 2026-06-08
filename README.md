@@ -139,7 +139,7 @@ network-stack → security-stack → aurora-stack → compute-stack
 | cxr-svc | 2 | 8GB | 2 (Multi-AZ) | min 2 / max 6 |
 | lab-svc | 1 | 2GB | 2 (Multi-AZ) | min 2 / max 4 |
 | router-svc | 0.25 | 0.5GB | 2 (Multi-AZ) | — |
-| HAPI FHIR | EC2 t4g.medium | — | 1 | Graceful Queue 안전망 |
+| HAPI FHIR | EC2 t3.large | — | 1 | Graceful Queue 안전망 |
 
 ### 네트워크 (VPC 10.0.0.0/16)
 
@@ -150,8 +150,8 @@ Private Data Subnet (DB)     10.0.21.0/24, 10.0.22.0/24
 VPC Endpoints Subnet         10.0.31.0/24
 ```
 
-- NAT Gateway 미사용 → VPC Endpoint 6개로 대체 (비용 절감 + 보안 강화)
-- Bedrock, S3, ECR, Secrets Manager, CloudWatch Logs 모두 PrivateLink 경유
+- NAT Gateway 미사용 → VPC Endpoint 8개로 대체 (비용 절감 + 보안 강화)
+- Bedrock, S3 (Gateway), ECR (api/dkr), KMS, Secrets Manager, CloudWatch Logs, CloudWatch Metrics 모두 PrivateLink 경유
 
 ### 데이터베이스
 
