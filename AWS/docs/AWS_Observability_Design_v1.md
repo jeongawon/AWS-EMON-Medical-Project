@@ -105,16 +105,16 @@ EC2 (HAPI): CPUUtilization, StatusCheckFailed, NetworkIn/Out
 
 커스텀 메트릭 (FastAPI에서 직접 전송)
 ─────────────────────────────────────────────────────────────────────
-EADSS/Orchestrator
+EMON/Orchestrator
   ─ TriageProcessingTime    (트리아지 응답 시간)
   ─ ModalDispatchCount      (모달 호출 횟수)
 
-EADSS/RAG (Phase 2)
+EMON/RAG (Phase 2)
   ─ SearchLatencyMs         (ChromaDB 검색 지연)
   ─ AvgSimilarity           (평균 유사도)
   ─ FallbackUsed            (fallback 발동 횟수)
 
-EADSS/FHIRQueue
+EMON/FHIRQueue
   ─ PendingCount            (Graceful Queue 적체 수)
   ─ SyncedRate              (분당 동기화 건수)
 ```
@@ -153,7 +153,7 @@ fields @timestamp, @message
 ### 3.5 CloudWatch Dashboards
 
 ```
-1개 통합 대시보드 — "EADSS 실시간 상태판"
+1개 통합 대시보드 — "EMON 실시간 상태판"
 ─────────────────────────────────────────────────────────────────────
 위젯 구성:
 ─ ECS Service 4개 CPU/메모리/Task 수
@@ -179,7 +179,7 @@ fields @timestamp, @message
 ### 4.1 SNS Topic 2개
 
 ```
-[EADSS-Critical-Alert]  긴급 알람 전용
+[EMON-Critical-Alert]  긴급 알람 전용
 ─────────────────────────────────────────────────────────────────────
 구독자:
   ─ Lambda (→ Slack #응급 채널)
@@ -193,7 +193,7 @@ fields @timestamp, @message
   ─ aurora-acu-saturated
   ─ ecs-service-down
 
-[EADSS-Warning-Alert]  경고 수준
+[EMON-Warning-Alert]  경고 수준
 ─────────────────────────────────────────────────────────────────────
 구독자:
   ─ Lambda (→ Slack #운영 채널)
@@ -391,7 +391,7 @@ useEffect(() => {
 │    ↓                                                              │
 │ CloudWatch Alarm "aurora-acu-saturated"                          │
 │    ↓ Action                                                       │
-│ SNS Topic "EADSS-Critical-Alert"                                 │
+│ SNS Topic "EMON-Critical-Alert"                                 │
 │    ├─► Lambda → Slack #응급 채널 "@here ACU 포화" 메시지          │
 │    └─► Email → 당직 운영자                                        │
 │                                                                  │
